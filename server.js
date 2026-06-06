@@ -1,0 +1,110 @@
+const crypto   = require('crypto');
+const express  = require('express');
+const Database = require('better-sqlite3');
+const multer   = require('multer');
+const path     = require('path');
+const fs       = require('fs');
+
+const app  = express();
+const PORT = process.env.PORT || 3000;
+
+// ── AUTH ──
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'genx1985';
+
+function getToken(req) {
+  var m = (req.headers.cookie || '').match(/(?:^|;\s*)trm_session=([^;]+)/);
+  return m ? m[1] : null;
+}
+function requireAuth(req, res, next) {
+  if (stmtHasSession.get(getToken(req))) return next();
+  res.status(401).json({ error: 'unauthorized' });
+}
+
+const DB_PATH    = path.join(__dirname, 'data', 'site.db');
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+
+// Ensure runtime directories exist
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+// SQLite
+const db = new Database(DB_PATH);
+db.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+db.exec('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY)');
+
+const stmtGet        = db.prepare('SELECT value FROM kv WHERE key = ?');
+const stmtUpsert     = db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)');
+const stmtAddSession = db.prepare('INSERT OR IGNORE INTO sessions (token) VALUES (?)');
+const stmtDelSession = db.prepare('DELETE FROM sessions WHERE token = ?');
+const stmtHasSession = db.prepare('SELECT 1 FROM sessions WHERE token = ?');
+
+// File upload — unique timestamped filenames, preserve extension
+const storage = multer.diskStorage({
+  destination: function(req, file, cb) { cb(null, UPLOAD_DIR); },
+  filename: function(req, file, cb) {
+    var unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, unique + path.extname(file.originalname));
+  }
+});
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 100 * 1024 * 1024 } // 100 MB
+});
+
+// Middleware
+app.use(express.json({ limit: '50mb' }));
+app.use('/uploads', express.static(UPLOAD_DIR));
+app.use(express.static(__dirname));
+
+// ── API ──
+
+// POST /api/login ← { password }
+app.post('/api/login', function(req, res) {
+  if (req.body.password !== ADMIN_PASSWORD)
+    return res.status(401).json({ error: 'wrong password' });
+  var token = crypto.randomBytes(32).toString('hex');
+  stmtAddSession.run(token);
+  res.setHeader('Set-Cookie', 'trm_session=' + token + '; HttpOnly; SameSite=Strict; Path=/');
+  res.json({ ok: true });
+});
+
+// POST /api/logout
+app.post('/api/logout', function(req, res) {
+  stmtDelSession.run(getToken(req));
+  res.setHeader('Set-Cookie', 'trm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+  res.json({ ok: true });
+});
+
+// GET /api/auth-check — lets the frontend verify its session is still valid
+app.get('/api/auth-check', function(req, res) {
+  res.json({ admin: !!stmtHasSession.get(getToken(req)) });
+});
+
+// GET /api/data → { pages, settings }
+app.get('/api/data', function(req, res) {
+  var pRow = stmtGet.get('pages');
+  var sRow = stmtGet.get('settings');
+  res.json({
+    pages:    pRow ? JSON.parse(pRow.value) : null,
+    settings: sRow ? JSON.parse(sRow.value) : null
+  });
+});
+
+// POST /api/data ← { pages?, settings? }  [auth required]
+app.post('/api/data', requireAuth, function(req, res) {
+  var pages    = req.body.pages;
+  var settings = req.body.settings;
+  if (pages    !== undefined) stmtUpsert.run('pages',    JSON.stringify(pages));
+  if (settings !== undefined) stmtUpsert.run('settings', JSON.stringify(settings));
+  res.json({ ok: true });
+});
+
+// POST /api/upload ← multipart file → { url }  [auth required]
+app.post('/api/upload', requireAuth, upload.single('file'), function(req, res) {
+  if (!req.file) return res.status(400).json({ error: 'no file received' });
+  res.json({ url: '/uploads/' + req.file.filename });
+});
+
+app.listen(PORT, function() {
+  console.log('Terminal running at http://localhost:' + PORT);
+});

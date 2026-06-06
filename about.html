@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TERMINAL</title>
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body data-page="about">
+
+<div id="scanlines"></div>
+<div id="vignette"></div>
+
+<div id="shell">
+
+  <div id="topbar">
+    <div id="sysname">[ TERMINAL ]</div>
+    <div id="topbar-right">
+      <span id="clock">--:--:--</span>
+      <button id="admin-btn" onclick="toggleAdmin()">&#x2B21; admin</button>
+    </div>
+  </div>
+
+  <div id="layout">
+
+    <aside id="sidebar">
+      <div class="sidebar-label">// dirs</div>
+      <div id="admin-badge">&#x2B21; ADMIN MODE</div>
+      <ul id="nav-list"></ul>
+      <hr class="nav-divider">
+      <button id="btn-new-page" class="locked" onclick="openNewPage()">+ new page</button>
+      <div class="sidebar-footer">
+        uptime<br>
+        <span id="uptime-s">0d 00:00:00</span>
+      </div>
+    </aside>
+
+    <main id="content">
+      <div class="prompt-line">
+        <span class="pu">terminal</span>:~/<span id="breadcrumb">about</span>$
+      </div>
+      <div id="pages">
+        <div class="page active">
+
+          <div class="sec-hdr">
+            <span>&gt; <span id="about-heading">ABOUT.TXT</span></span>
+          </div>
+
+          <div class="edit-toolbar" id="tb-about">
+            <button class="etool" onclick="editHeading('about')">&#x270E; heading</button>
+            <button class="etool" onclick="editBody('about')">&#x270E; body</button>
+          </div>
+
+          <div class="article-body" id="about-body">
+            <p>&gt; Hello. I&#39;m a developer, writer, and digital explorer.</p>
+            <p>&gt; This site runs on plain HTML and zero frameworks. Built to last decades &mdash; just like the machines that inspired it.</p>
+            <p>&gt; I believe in open source, slow software, and the beauty of the command line.</p>
+          </div>
+
+        </div>
+      </div>
+    </main>
+
+  </div>
+</div>
+
+<!-- ── ADMIN LOGIN ── -->
+<div class="modal-bg" id="modal-login">
+  <div class="modal-box">
+    <div class="modal-title">&gt; ADMIN_LOGIN.SH</div>
+    <div class="modal-label">Password</div>
+    <input class="modal-input" type="password" id="pw-input" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" />
+    <div class="modal-error" id="pw-error"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-login')">cancel</button>
+      <button class="btn primary" onclick="doLogin()">[ login ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── NEW PAGE ── -->
+<div class="modal-bg" id="modal-newpage">
+  <div class="modal-box">
+    <div class="modal-title">&gt; NEW_PAGE.INIT</div>
+    <div class="modal-label">Page name / slug</div>
+    <input class="modal-input" type="text" id="np-slug" placeholder="e.g. projects" maxlength="24" />
+    <div class="modal-label">Template</div>
+    <div class="tpl-grid">
+      <div class="tpl-card sel" data-tpl="article" onclick="selTpl(this)">
+        <span class="tpl-icon">[&sect;]</span>Article
+      </div>
+      <div class="tpl-card" data-tpl="blog" onclick="selTpl(this)">
+        <span class="tpl-icon">[&equiv;]</span>Blog list
+      </div>
+      <div class="tpl-card" data-tpl="gallery" onclick="selTpl(this)">
+        <span class="tpl-icon">[&#x25A6;]</span>Gallery
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-newpage')">cancel</button>
+      <button class="btn primary" onclick="doCreatePage()">[ create ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── EDIT FIELD ── -->
+<div class="modal-bg" id="modal-edit">
+  <div class="modal-box">
+    <div class="modal-title" id="edit-modal-title">&gt; EDIT.SH</div>
+    <div class="modal-label" id="edit-modal-label">Value</div>
+    <input class="modal-input" type="text" id="edit-single" style="display:none" />
+    <textarea class="modal-textarea" id="edit-multi" style="display:none"></textarea>
+    <div class="modal-hint" id="edit-modal-hint"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-edit')">cancel</button>
+      <button class="btn primary" onclick="commitEdit()">[ save ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── VIDEO URL ── -->
+<div class="modal-bg" id="modal-videourl">
+  <div class="modal-box">
+    <div class="modal-title">&gt; ADD_VIDEO.SH</div>
+    <div class="modal-label">Video URL</div>
+    <input class="modal-input" type="text" id="vid-url-input" placeholder="https://youtube.com/watch?v=... or direct .mp4 URL" />
+    <div class="modal-hint">Supports YouTube, Vimeo, and any direct video URL (mp4, webm, etc.)</div>
+    <div class="modal-label">Caption (optional)</div>
+    <input class="modal-input" type="text" id="vid-url-caption" placeholder="My video" />
+    <div class="modal-error" id="vid-url-error"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-videourl')">cancel</button>
+      <button class="btn primary" onclick="commitVideoUrl()">[ add ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MEDIA URL ── -->
+<div class="modal-bg" id="modal-mediaurl">
+  <div class="modal-box">
+    <div class="modal-title">&gt; ADD_URL.SH</div>
+    <div class="modal-label">Media URL</div>
+    <input class="modal-input" type="text" id="media-url-input" placeholder="https://... image, audio, video, or YouTube/Vimeo" />
+    <div class="modal-hint">Supports images, audio, direct video files, YouTube and Vimeo links.</div>
+    <div class="modal-label">Caption (optional)</div>
+    <input class="modal-input" type="text" id="media-url-caption" placeholder="Caption" />
+    <div class="modal-error" id="media-url-error"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-mediaurl')">cancel</button>
+      <button class="btn primary" onclick="commitMediaUrl()">[ add ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── DELETE PAGE ── -->
+<div class="modal-bg" id="modal-delpage">
+  <div class="modal-box">
+    <div class="modal-title">&gt; DELETE_PAGE.SH</div>
+    <p style="font-size:13px;color:var(--green);margin-bottom:16px;">&gt; This will permanently delete the page and all its content.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-delpage')">cancel</button>
+      <button class="btn danger" onclick="doDeletePage()">[ delete ]</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/admin.js"></script>
+</body>
+</html>

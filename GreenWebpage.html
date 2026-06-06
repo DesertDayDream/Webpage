@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GENX SOFT CLUB</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+
+/* ── RESET & ROOT ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --green:        #33ff33;
+  --green-dim:    #1a8c1a;
+  --green-bright: #66ff66;
+  --green-faint:  rgba(51,255,51,0.06);
+  --amber:        #ffb000;
+  --red:          #ff4444;
+  --bg:           #020a02;
+  --scanline:     rgba(0,0,0,0.18);
+  --glow:         0 0 8px #33ff33, 0 0 2px #33ff33;
+  --glow-dim:     0 0 4px rgba(51,255,51,0.5);
+  --mono:         'Share Tech Mono', monospace;
+  --vt:           'VT323', monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--green);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow: hidden;
+}
+
+/* ── CRT OVERLAY ── */
+#scanlines {
+  pointer-events: none;
+  position: fixed; inset: 0; z-index: 9000;
+  background: repeating-linear-gradient(to bottom,
+    transparent 0px, transparent 2px,
+    var(--scanline) 2px, var(--scanline) 4px);
+  mix-blend-mode: multiply;
+}
+#vignette {
+  pointer-events: none;
+  position: fixed; inset: 0; z-index: 8999;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.75) 100%);
+}
+
+/* ── SHELL ── */
+#shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 14px 16px;
+}
+
+/* ── TOPBAR ── */
+#topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--green-dim);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+#sysname {
+  font-family: var(--vt);
+  font-size: 22px;
+  color: var(--green-bright);
+  text-shadow: var(--glow);
+  letter-spacing: 2px;
+}
+#topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--green-dim);
+}
+#clock { letter-spacing: 1px; }
+
+#admin-btn {
+  background: none;
+  border: 1px solid var(--green-dim);
+  color: var(--green-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  transition: all .15s;
+}
+#admin-btn:hover, #admin-btn.active {
+  border-color: var(--amber);
+  color: var(--amber);
+  text-shadow: 0 0 6px var(--amber);
+}
+#admin-btn.active { border-color: var(--red); color: var(--red); text-shadow: 0 0 6px var(--red); }
+
+/* ── LAYOUT ── */
+#layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 0;
+}
+
+/* ── SIDEBAR ── */
+#sidebar {
+  width: 190px;
+  min-width: 190px;
+  border-right: 1px solid var(--green-dim);
+  padding-right: 14px;
+  margin-right: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.sidebar-label {
+  font-size: 11px;
+  color: var(--green-dim);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+#nav-list { list-style: none; flex: 1; }
+#nav-list li { margin-bottom: 2px; }
+
+.nav-btn {
+  background: none;
+  border: none;
+  color: var(--green-dim);
+  font-family: var(--mono);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 5px 8px;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: color .1s, background .1s;
+  letter-spacing: .5px;
+}
+.nav-btn .arr { opacity: 0; color: var(--green-bright); transition: opacity .1s; }
+.nav-btn:hover, .nav-btn.active { color: var(--green-bright); background: var(--green-faint); }
+.nav-btn.active { text-shadow: var(--glow-dim); }
+.nav-btn:hover .arr, .nav-btn.active .arr { opacity: 1; }
+
+.nav-divider { border: none; border-top: 1px dashed var(--green-dim); margin: 10px 0; opacity: .4; }
+
+#btn-new-page {
+  background: none;
+  border: 1px solid var(--green-dim);
+  color: var(--green-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  width: 100%;
+  padding: 5px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 1px;
+  transition: all .1s;
+  margin-bottom: 10px;
+}
+#btn-new-page:hover { color: var(--green-bright); border-color: var(--green); background: var(--green-faint); }
+#btn-new-page.locked { opacity: .35; cursor: not-allowed; }
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 10px;
+  font-size: 11px;
+  color: var(--green-dim);
+  opacity: .5;
+  line-height: 1.9;
+  border-top: 1px dashed var(--green-dim);
+}
+#admin-badge {
+  display: none;
+  font-size: 11px;
+  color: var(--amber);
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+  text-shadow: 0 0 6px var(--amber);
+}
+
+/* ── CONTENT ── */
+#content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.prompt-line {
+  font-size: 12px;
+  color: var(--green-dim);
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.prompt-line .pu { color: var(--green-bright); }
+
+.page { display: none; }
+.page.active { display: block; animation: fadeIn .2s ease; }
+@keyframes fadeIn { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:translateY(0); } }
+
+/* ── SECTION HEADER ── */
+.sec-hdr {
+  font-family: var(--vt);
+  font-size: 20px;
+  color: var(--green-bright);
+  text-shadow: var(--glow);
+  letter-spacing: 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px dashed var(--green-dim);
+  padding-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ── EDIT TOOLBAR ── */
+.edit-toolbar {
+  display: none;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.edit-toolbar.show { display: flex; }
+.etool {
+  background: none;
+  border: 1px solid var(--green-dim);
+  color: var(--green-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  transition: all .1s;
+}
+.etool:hover { color: var(--green-bright); border-color: var(--green); background: var(--green-faint); }
+.etool.danger:hover { color: var(--red); border-color: var(--red); }
+
+/* ── HOME ── */
+#page-home .ascii {
+  font-family: var(--vt);
+  font-size: 28px;
+  color: var(--green-bright);
+  text-shadow: var(--glow);
+  letter-spacing: 3px;
+  margin-bottom: 8px;
+}
+#page-home .tagline {
+  font-size: 12px;
+  color: var(--green-dim);
+  margin-bottom: 18px;
+  letter-spacing: 1px;
+}
+.status-block {
+  font-size: 12px;
+  border-left: 2px solid var(--green-dim);
+  padding-left: 10px;
+  line-height: 2.2;
+}
+.status-block .k { color: var(--green); }
+.status-block .v { color: var(--green-bright); }
+
+/* editable spans */
+[contenteditable="true"] {
+  outline: none;
+  border-bottom: 1px dashed var(--green-dim);
+  cursor: text;
+  min-width: 40px;
+  display: inline-block;
+}
+[contenteditable="true"]:focus { border-color: var(--green); text-shadow: var(--glow-dim); }
+
+/* ── ARTICLE ── */
+.article-body {
+  max-width: 620px;
+  font-size: 13px;
+  line-height: 2;
+  color: var(--green);
+}
+.article-body p { margin-bottom: 12px; }
+
+/* ── BLOG LIST ── */
+.blog-list { list-style: none; }
+.blog-item {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px dotted var(--green-dim);
+}
+.blog-item .bdate { font-size: 11px; color: var(--green-dim); min-width: 88px; }
+.blog-item .btitle { font-size: 13px; color: var(--green); flex: 1; }
+.blog-item .blink { font-size: 11px; color: var(--green-dim); cursor: pointer; transition: color .1s; }
+.blog-item .blink:hover { color: var(--red); }
+.blog-add {
+  margin-top: 10px;
+  display: none;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.blog-add.show { display: flex; }
+.blog-add input {
+  background: var(--green-faint);
+  border: 1px solid var(--green-dim);
+  color: var(--green-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+  caret-color: var(--green-bright);
+}
+.blog-add input:focus { border-color: var(--green); }
+.blog-add input.wide { flex: 1; min-width: 160px; }
+
+/* ── GALLERY ── */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.gallery-cell {
+  border: 1px solid var(--green-dim);
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--green-dim);
+  overflow: hidden;
+  position: relative;
+  cursor: default;
+  flex-direction: column;
+  background: #000;
+}
+.gallery-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery-cell.video-cell {
+  aspect-ratio: 16/9;
+  grid-column: span 2;
+  background: #000;
+}
+.gallery-cell.video-cell video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+.video-thumb {
+  width: 100%; height: 100%;
+  position: relative;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+.video-play-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(2,10,2,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity .15s;
+  font-size: 13px;
+  color: var(--green-bright);
+  text-shadow: var(--glow);
+  letter-spacing: 2px;
+}
+.video-thumb:hover .video-play-overlay { opacity: 1; }
+.video-fs-btn {
+  position: absolute;
+  bottom: 28px; right: 6px;
+  background: rgba(0,0,0,.75);
+  border: 1px solid var(--green-dim);
+  color: var(--green-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+  z-index: 3;
+  transition: all .1s;
+  display: none;
+}
+.gallery-cell.video-cell:hover .video-fs-btn { display: block; }
+.video-fs-btn:hover { color: var(--green-bright); border-color: var(--green); }
+.video-offline {
+  font-size: 11px;
+  color: var(--green-dim);
+  text-align: center;
+  padding: 10px;
+  line-height: 1.8;
+}
+.video-offline span { color: var(--amber); }
+.gallery-cell.audio-cell {
+  aspect-ratio: unset;
+  min-height: 80px;
+  padding: 10px;
+  flex-direction: column;
+  gap: 6px;
+  grid-column: span 2;
+  background: transparent;
+}
+.gallery-cell.audio-cell audio {
+  width: 100%;
+  filter: sepia(1) hue-rotate(60deg) saturate(3) brightness(0.8);
+}
+.gallery-cell.audio-cell .audio-label {
+  font-size: 11px;
+  color: var(--green-dim);
+  text-align: center;
+  word-break: break-all;
+}
+.gallery-cell .del-img {
+  display: none;
+  position: absolute;
+  top: 4px; right: 4px;
+  background: rgba(0,0,0,.7);
+  border: 1px solid var(--red);
+  color: var(--red);
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-family: var(--mono);
+  z-index: 4;
+}
+.gallery-cell:hover .del-img { display: block; }
+.gallery-cell .caption {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(2,10,2,.8);
+  font-size: 10px;
+  padding: 3px 6px;
+  color: var(--green-dim);
+  text-align: center;
+  z-index: 2;
+}
+.gallery-cell.audio-cell .caption { position: static; background: none; }
+
+/* ── MODALS ── */
+.modal-bg {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,8,0,.9);
+  z-index: 5000;
+  align-items: center;
+  justify-content: center;
+}
+.modal-bg.open { display: flex; }
+.modal-box {
+  background: var(--bg);
+  border: 1px solid var(--green);
+  box-shadow: var(--glow-dim);
+  padding: 22px;
+  width: 380px;
+  max-width: 95vw;
+  animation: fadeIn .15s ease;
+}
+.modal-title {
+  font-family: var(--vt);
+  font-size: 20px;
+  color: var(--green-bright);
+  text-shadow: var(--glow);
+  letter-spacing: 2px;
+  margin-bottom: 14px;
+  border-bottom: 1px dashed var(--green-dim);
+  padding-bottom: 6px;
+}
+.modal-label {
+  font-size: 11px;
+  color: var(--green-dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.modal-input {
+  width: 100%;
+  background: var(--green-faint);
+  border: 1px solid var(--green-dim);
+  color: var(--green-bright);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 7px 10px;
+  margin-bottom: 14px;
+  outline: none;
+  caret-color: var(--green-bright);
+}
+.modal-input:focus { border-color: var(--green); box-shadow: var(--glow-dim); }
+.modal-input[type=password] { letter-spacing: 3px; }
+.modal-error { font-size: 12px; color: var(--red); margin-bottom: 10px; min-height: 18px; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.btn {
+  background: none;
+  border: 1px solid var(--green-dim);
+  color: var(--green-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 16px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  transition: all .1s;
+}
+.btn:hover { color: var(--green-bright); border-color: var(--green); background: var(--green-faint); }
+.btn.primary { border-color: var(--green); color: var(--green-bright); }
+.btn.danger { border-color: var(--red); color: var(--red); }
+
+/* template picker */
+.tpl-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.tpl-card {
+  border: 1px solid var(--green-dim);
+  padding: 10px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--green-dim);
+  text-align: center;
+  transition: all .1s;
+  letter-spacing: .5px;
+}
+.tpl-card:hover, .tpl-card.sel {
+  border-color: var(--green);
+  color: var(--green-bright);
+  background: var(--green-faint);
+  text-shadow: var(--glow-dim);
+}
+.tpl-icon { font-size: 18px; display: block; margin-bottom: 4px; }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--green-dim); }
+
+/* ── EDIT MODAL ── */
+.modal-textarea {
+  width: 100%;
+  background: var(--green-faint);
+  border: 1px solid var(--green-dim);
+  color: var(--green-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 8px 10px;
+  margin-bottom: 14px;
+  outline: none;
+  caret-color: var(--green-bright);
+  resize: vertical;
+  min-height: 120px;
+  line-height: 1.8;
+}
+.modal-textarea:focus { border-color: var(--green); box-shadow: var(--glow-dim); }
+.modal-hint { font-size: 11px; color: var(--green-dim); margin-top: -10px; margin-bottom: 12px; opacity: .7; }
+</style>
+</head>
+<body>
+
+<div id="scanlines"></div>
+<div id="vignette"></div>
+
+<div id="shell">
+
+  <!-- TOPBAR -->
+  <div id="topbar">
+    <div id="sysname">[ GENX SOFT CLUB ]</div>
+    <div id="topbar-right">
+      <span id="clock">--:--:--</span>
+      <button id="admin-btn" onclick="toggleAdmin()">⬡ admin</button>
+    </div>
+  </div>
+
+  <!-- LAYOUT -->
+  <div id="layout">
+
+    <!-- SIDEBAR -->
+    <aside id="sidebar">
+      <div class="sidebar-label">// dirs</div>
+      <div id="admin-badge">⬡ ADMIN MODE</div>
+      <ul id="nav-list"></ul>
+      <hr class="nav-divider">
+      <button id="btn-new-page" class="locked" onclick="openNewPage()">+ new page</button>
+      <div class="sidebar-footer">
+        uptime<br>
+        <span id="uptime-s">0d 00:00:00</span>
+      </div>
+    </aside>
+
+    <!-- CONTENT -->
+    <main id="content">
+      <div class="prompt-line">
+        <span class="pu">user@genxsoft</span>:~/<span id="breadcrumb">home</span>$
+      </div>
+      <div id="pages"></div>
+    </main>
+
+  </div>
+</div>
+
+<!-- ── ADMIN LOGIN MODAL ── -->
+<div class="modal-bg" id="modal-login">
+  <div class="modal-box">
+    <div class="modal-title">> ADMIN_LOGIN.SH</div>
+    <div class="modal-label">Password</div>
+    <input class="modal-input" type="password" id="pw-input" placeholder="••••••••" />
+    <div class="modal-error" id="pw-error"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-login')">cancel</button>
+      <button class="btn primary" onclick="doLogin()">[ login ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── NEW PAGE MODAL ── -->
+<div class="modal-bg" id="modal-newpage">
+  <div class="modal-box">
+    <div class="modal-title">> NEW_PAGE.INIT</div>
+    <div class="modal-label">Page name / slug</div>
+    <input class="modal-input" type="text" id="np-slug" placeholder="e.g. projects" maxlength="24" />
+    <div class="modal-label">Template</div>
+    <div class="tpl-grid">
+      <div class="tpl-card sel" data-tpl="article" onclick="selTpl(this)">
+        <span class="tpl-icon">[§]</span>Article
+      </div>
+      <div class="tpl-card" data-tpl="blog" onclick="selTpl(this)">
+        <span class="tpl-icon">[≡]</span>Blog list
+      </div>
+      <div class="tpl-card" data-tpl="gallery" onclick="selTpl(this)">
+        <span class="tpl-icon">[▦]</span>Gallery
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-newpage')">cancel</button>
+      <button class="btn primary" onclick="doCreatePage()">[ create ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── EDIT FIELD MODAL ── -->
+<div class="modal-bg" id="modal-edit">
+  <div class="modal-box">
+    <div class="modal-title" id="edit-modal-title">> EDIT.SH</div>
+    <div class="modal-label" id="edit-modal-label">Value</div>
+    <input class="modal-input" type="text" id="edit-single" style="display:none" />
+    <textarea class="modal-textarea" id="edit-multi" style="display:none"></textarea>
+    <div class="modal-hint" id="edit-modal-hint"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-edit')">cancel</button>
+      <button class="btn primary" onclick="commitEdit()">[ save ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── VIDEO URL MODAL ── -->
+<div class="modal-bg" id="modal-videourl">
+  <div class="modal-box">
+    <div class="modal-title">> ADD_VIDEO.SH</div>
+    <div class="modal-label">Video URL</div>
+    <input class="modal-input" type="text" id="vid-url-input" placeholder="https://youtube.com/watch?v=... or direct .mp4 URL" />
+    <div class="modal-hint">Supports YouTube, Vimeo, and any direct video URL (mp4, webm, etc.)</div>
+    <div class="modal-label">Caption (optional)</div>
+    <input class="modal-input" type="text" id="vid-url-caption" placeholder="My video" />
+    <div class="modal-error" id="vid-url-error"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-videourl')">cancel</button>
+      <button class="btn primary" onclick="commitVideoUrl()">[ add ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── DELETE PAGE CONFIRM ── -->
+<div class="modal-bg" id="modal-delpage">
+  <div class="modal-box">
+    <div class="modal-title">> DELETE_PAGE.SH</div>
+    <p style="font-size:13px;color:var(--green);margin-bottom:16px;">> This will permanently delete the page and all its content.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-delpage')">cancel</button>
+      <button class="btn danger" onclick="doDeletePage()">[ delete ]</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── CONFIG ──
+var ADMIN_PASSWORD = 'genx1985'; // ← change this
+
+// ── STATE ──
+var isAdmin = false;
+var currentPage = 'home';
+var selectedTpl = 'article';
+var pageToDelete = null;
+var startTime = Date.now();
+
+// ── STORAGE HELPERS ──
+function save(key, val) {
+  try { localStorage.setItem('gsx_' + key, JSON.stringify(val)); } catch(e) {}
+}
+function load(key, def) {
+  try {
+    var v = localStorage.getItem('gsx_' + key);
+    return v !== null ? JSON.parse(v) : def;
+  } catch(e) { return def; }
+}
+
+// ── SITE SETTINGS ──
+var siteSettings = load('settings', { title: 'GENX SOFT CLUB' });
+
+function applySiteTitle() {
+  var t = siteSettings.title || 'GENX SOFT CLUB';
+  document.title = t;
+  document.getElementById('sysname').textContent = '[ ' + t + ' ]';
+}
+applySiteTitle();
+
+// ── PAGE DATA ──
+// Each page: { id, type, title, data }
+// home: { tagline, status:{} }
+// article: { heading, body }
+// blog: { heading, posts:[ {date,title} ] }
+// gallery: { heading, images:[ {src,caption} ] }
+
+function defaultPages() {
+  return [
+    {
+      id: 'home', type: 'home', title: 'home',
+      data: {
+        welcome: '■ WELCOME TO MY TERMINAL ■',
+        tagline: '> personal portfolio & blog — est. 2025',
+        status: { VERSION: '1.0.0', SYSTEM: 'VERT OS', MODE: 'READ/WRITE' }
+      }
+    },
+    {
+      id: 'about', type: 'article', title: 'about',
+      data: {
+        heading: 'ABOUT.TXT',
+        body: '> Hello. I\'m a developer, writer, and digital explorer.\n\n> This site runs on plain HTML and zero frameworks. Built to last decades — just like the machines that inspired it.\n\n> I believe in open source, slow software, and the beauty of the command line.'
+      }
+    },
+    {
+      id: 'blog', type: 'blog', title: 'blog',
+      data: {
+        heading: 'BLOG / INDEX',
+        posts: [
+          { date: '2025-11-02', title: 'Why I still use a text editor from 1991' },
+          { date: '2025-09-18', title: 'The case for boring technology' },
+          { date: '2025-07-04', title: 'Static sites and the slow web manifesto' },
+          { date: '2025-05-21', title: 'CRT displays: a love letter to phosphor' }
+        ]
+      }
+    },
+    {
+      id: 'contact', type: 'article', title: 'contact',
+      data: {
+        heading: 'CONTACT.SH',
+        body: '> EMAIL     user@genxsoft.club\n\n> GITHUB    github.com/yourhandle\n\n> MASTODON  @user@fosstodon.org\n\n> PGP KEY   0xDEAD BEEF CAFE 1337\n\n> Response time: usually within 48h. No spam. No trackers.'
+      }
+    }
+  ];
+}
+
+var pages = load('pages', null);
+if (!pages) { pages = defaultPages(); save('pages', pages); }
+
+// ── MIGRATE: force SYSTEM to VERT OS if still old value ──
+(function() {
+  var home = pages.find(function(p) { return p.id === 'home'; });
+  if (home && home.data && home.data.status) {
+    var sys = home.data.status.SYSTEM;
+    if (!sys || sys === 'GENX SOFT CLUB OS') {
+      home.data.status.SYSTEM = 'VERT OS';
+      save('pages', pages);
+    }
+  }
+})();
+
+// ── CLOCK ──
+function pad(n) { return String(n).padStart(2, '0'); }
+function tick() {
+  var now = new Date();
+  document.getElementById('clock').textContent =
+    pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+  var e = Math.floor((Date.now() - startTime) / 1000);
+  var s = e % 60, m = Math.floor(e / 60) % 60, h = Math.floor(e / 3600) % 24, d = Math.floor(e / 86400);
+  var u = d + 'd ' + pad(h) + ':' + pad(m) + ':' + pad(s);
+  var uel = document.getElementById('uptime-s');
+  if (uel) uel.textContent = u;
+  var hup = document.getElementById('dyn-uptime');
+  if (hup) hup.textContent = u;
+}
+setInterval(tick, 1000); tick();
+
+// ── RENDER NAV ──
+function renderNav() {
+  var ul = document.getElementById('nav-list');
+  ul.innerHTML = '';
+  pages.forEach(function(pg) {
+    var li = document.createElement('li');
+    var btn = document.createElement('button');
+    btn.className = 'nav-btn' + (pg.id === currentPage ? ' active' : '');
+    btn.dataset.id = pg.id;
+    btn.innerHTML = '<span class="arr">&gt;</span> ' + pg.title;
+    btn.onclick = function() { showPage(pg.id); };
+    li.appendChild(btn);
+    ul.appendChild(li);
+  });
+}
+
+// ── RENDER ALL PAGES ──
+function renderPages() {
+  var container = document.getElementById('pages');
+  container.innerHTML = '';
+  pages.forEach(function(pg) {
+    var div = document.createElement('div');
+    div.className = 'page' + (pg.id === currentPage ? ' active' : '');
+    div.id = 'pg-' + pg.id;
+    div.innerHTML = buildPageHTML(pg);
+    container.appendChild(div);
+    bindPageEvents(pg, div);
+  });
+}
+
+function buildPageHTML(pg) {
+  switch (pg.type) {
+    case 'home':    return buildHome(pg);
+    case 'article': return buildArticle(pg);
+    case 'blog':    return buildBlog(pg);
+    case 'gallery': return buildGallery(pg);
+    default:        return '';
+  }
+}
+
+// ── HOME ──
+function buildHome(pg) {
+  var d = pg.data;
+  var statusRows = '';
+  statusRows += '<div><span class="k">STATUS&nbsp;&nbsp;&nbsp;</span> <span class="v">ONLINE</span></div>';
+  Object.keys(d.status).forEach(function(k) {
+    var pad = k.length < 9 ? '&nbsp;'.repeat(9 - k.length) : '';
+    statusRows += '<div><span class="k">' + k + pad + '</span> <span class="v">' + d.status[k] + '</span></div>';
+  });
+  statusRows += '<div><span class="k">UPTIME&nbsp;&nbsp;&nbsp;</span> <span class="v" id="dyn-uptime">0d 00:00:00</span></div>';
+  return '<div class="ascii">' + esc(d.welcome || '■ WELCOME TO MY TERMINAL ■') + '</div>' +
+    '<div class="tagline" id="home-tagline">' + esc(d.tagline) + '</div>' +
+    '<div class="edit-toolbar" id="tb-home">' +
+    '  <button class="etool" onclick="editSiteTitle()">✎ site title</button>' +
+    '  <button class="etool" onclick="editWelcome()">✎ welcome text</button>' +
+    '  <button class="etool" onclick="editTagline()">✎ tagline</button>' +
+    '</div>' +
+    '<div class="status-block">' + statusRows + '</div>';
+}
+
+// ── ARTICLE ──
+function buildArticle(pg) {
+  var d = pg.data;
+  var canDel = !['about','contact'].includes(pg.id);
+  var delBtn = canDel ? '<button class="etool danger" onclick="confirmDeletePage(\'' + pg.id + '\')">✕ delete page</button>' : '';
+  var lines = d.body.split('\n').filter(function(l) { return l.trim(); });
+  var paras = lines.map(function(l) { return '<p>' + esc(l) + '</p>'; }).join('');
+  return '<div class="sec-hdr"><span>> ' + esc(d.heading) + '</span></div>' +
+    '<div class="edit-toolbar" id="tb-' + pg.id + '">' +
+    '  <button class="etool" onclick="editHeading(\'' + pg.id + '\')">✎ heading</button>' +
+    '  <button class="etool" onclick="editBody(\'' + pg.id + '\')">✎ body</button>' +
+    delBtn +
+    '</div>' +
+    '<div class="article-body" id="body-' + pg.id + '">' + paras + '</div>';
+}
+
+// ── BLOG ──
+function buildBlog(pg) {
+  var d = pg.data;
+  var canDel = pg.id !== 'blog';
+  var delBtn = canDel ? '<button class="etool danger" onclick="confirmDeletePage(\'' + pg.id + '\')">✕ delete page</button>' : '';
+  var items = (d.posts || []).map(function(p, i) {
+    return '<li class="blog-item">' +
+      '<span class="bdate">' + esc(p.date) + '</span>' +
+      '<span class="btitle">' + esc(p.title) + '</span>' +
+      '<span class="blink admin-only" style="display:none" onclick="removePost(\'' + pg.id + '\',' + i + ')">✕</span>' +
+      '</li>';
+  }).join('');
+  return '<div class="sec-hdr"><span>> ' + esc(d.heading) + '</span></div>' +
+    '<div class="edit-toolbar" id="tb-' + pg.id + '">' +
+    '  <button class="etool" onclick="editHeading(\'' + pg.id + '\')">✎ heading</button>' +
+    '  <button class="etool" onclick="toggleAddPost(\'' + pg.id + '\')">+ add post</button>' +
+    delBtn +
+    '</div>' +
+    '<ul class="blog-list" id="blist-' + pg.id + '">' + items + '</ul>' +
+    '<div class="blog-add" id="badd-' + pg.id + '">' +
+    '  <input type="text" placeholder="YYYY-MM-DD" id="badd-date-' + pg.id + '" style="width:110px">' +
+    '  <input type="text" placeholder="Post title" id="badd-title-' + pg.id + '" class="wide">' +
+    '  <button class="btn primary" onclick="submitPost(\'' + pg.id + '\')">[ add ]</button>' +
+    '</div>';
+}
+
+// ── GALLERY ──
+function buildGallery(pg) {
+  var d = pg.data;
+  var canDel = pg.id !== 'gallery';
+  var delBtn = canDel ? '<button class="etool danger" onclick="confirmDeletePage(\'' + pg.id + '\')">✕ delete page</button>' : '';
+  var cells = (d.images || []).map(function(item, i) {
+    var del = '<span class="del-img admin-only" style="display:none" onclick="removeImage(\'' + pg.id + '\',' + i + ')">✕ del</span>';
+    var cap = '<span class="caption">' + esc(item.caption || '') + '</span>';
+    if (item.type === 'video') {
+      var vidId = 'vid-' + pg.id + '-' + i;
+      var inner = '';
+      if (item.embedUrl) {
+        // YouTube/Vimeo: show thumbnail that opens original URL in new tab
+        // Embedding is blocked on file:// — thumbnail + open link is universally reliable
+        var thumbUrl = '';
+        var openUrl = item.originalUrl || item.name || '';
+        var ytMatch = item.embedUrl.match(/youtube\.com\/embed\/([A-Za-z0-9_-]{11})/);
+        var vmMatch = item.embedUrl.match(/vimeo\.com\/video\/(\d+)/);
+        if (ytMatch) {
+          thumbUrl = 'https://img.youtube.com/vi/' + ytMatch[1] + '/hqdefault.jpg';
+        }
+        inner = '<div class="video-thumb" onclick="window.open(\'' + esc(openUrl) + '\',\'_blank\')" title="Open video">' +
+          (thumbUrl ? '<img src="' + thumbUrl + '" style="width:100%;height:100%;object-fit:cover;display:block;">' : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;"><span style="font-size:28px;color:var(--green-dim);">▶</span><span style="font-size:10px;color:var(--green-dim);">' + esc(item.caption || 'play video') + '</span></div>') +
+          '<div class="video-play-overlay"><span>▶ open</span></div>' +
+          '</div>';
+      } else if (item.directUrl) {
+        inner = '<video id="' + vidId + '" src="' + item.directUrl + '" controls preload="metadata" style="width:100%;height:100%;object-fit:contain;display:block;background:#000;"></video>' +
+          '<button class="video-fs-btn" onclick="goFullscreen(\'' + vidId + '\')">⛶ fullscreen</button>';
+      } else if (item.objUrl) {
+        inner = '<video id="' + vidId + '" src="' + item.objUrl + '" controls preload="metadata" style="width:100%;height:100%;object-fit:contain;display:block;background:#000;"></video>' +
+          '<button class="video-fs-btn" onclick="goFullscreen(\'' + vidId + '\')">⛶ fullscreen</button>';
+      } else {
+        inner = '<div class="video-offline"><span>[VIDEO]</span><br>' + esc(item.name || 'video') + '<br><span style="font-size:10px;">re-add via URL to persist</span></div>';
+      }
+      return '<div class="gallery-cell video-cell">' + inner + del + cap + '</div>';
+    } else if (item.type === 'audio') {
+      return '<div class="gallery-cell audio-cell">' +
+        '<div class="audio-label">' + esc(item.caption || item.name || 'audio') + '</div>' +
+        '<audio src="' + item.src + '" controls preload="metadata"></audio>' +
+        del +
+        '</div>';
+    } else {
+      return '<div class="gallery-cell">' +
+        (item.src ? '<img src="' + item.src + '" alt="' + esc(item.caption) + '">' : '<span>[' + pad2(i+1) + ']</span>') +
+        del + cap +
+        '</div>';
+    }
+  }).join('');
+  if (!cells) cells = '<div class="gallery-cell" style="grid-column:span 2;background:transparent;">[empty — upload media in admin mode]</div>';
+  return '<div class="sec-hdr"><span>> ' + esc(d.heading) + '</span></div>' +
+    '<div class="edit-toolbar" id="tb-' + pg.id + '">' +
+    '  <button class="etool" onclick="editHeading(\'' + pg.id + '\')">✎ heading</button>' +
+    '  <button class="etool" onclick="triggerUpload(\'' + pg.id + '\',\'image\')">⬆ image</button>' +
+    '  <button class="etool" onclick="openVideoUrlModal(\'' + pg.id + '\')">⬆ video url</button>' +
+    '  <button class="etool" onclick="triggerUpload(\'' + pg.id + '\',\'audio\')">⬆ audio</button>' +
+    '  <input type="file" id="up-img-' + pg.id + '" accept="image/*" style="display:none" onchange="handleUpload(this,\'' + pg.id + '\',\'image\')">' +
+    '  <input type="file" id="up-aud-' + pg.id + '" accept="audio/*,.mp3,.wav,.ogg,.flac,.aac,.m4a,.opus,.wma,.aiff,.ape" style="display:none" onchange="handleUpload(this,\'' + pg.id + '\',\'audio\')">' +
+    delBtn +
+    '</div>' +
+    '<div class="gallery-grid" id="ggrid-' + pg.id + '">' + cells + '</div>';
+}
+
+function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+function esc(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── BIND EVENTS ──
+function bindPageEvents(pg, div) {
+  // nothing extra needed — onclick attrs handle it
+}
+
+// ── SHOW PAGE ──
+function showPage(id) {
+  currentPage = id;
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  var pg = document.getElementById('pg-' + id);
+  if (pg) pg.classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.id === id);
+  });
+  document.getElementById('breadcrumb').textContent = id;
+}
+
+// ── ADMIN ──
+function toggleAdmin() {
+  if (isAdmin) { logoutAdmin(); }
+  else { openModal('modal-login'); setTimeout(function(){ document.getElementById('pw-input').focus(); }, 100); }
+}
+
+function doLogin() {
+  var pw = document.getElementById('pw-input').value;
+  if (pw === ADMIN_PASSWORD) {
+    isAdmin = true;
+    document.getElementById('pw-input').value = '';
+    document.getElementById('pw-error').textContent = '';
+    closeModal('modal-login');
+    applyAdminUI();
+  } else {
+    document.getElementById('pw-error').textContent = '> ACCESS DENIED — wrong password';
+    document.getElementById('pw-input').value = '';
+    document.getElementById('pw-input').focus();
+  }
+}
+
+function logoutAdmin() {
+  isAdmin = false;
+  applyAdminUI();
+}
+
+function applyAdminUI() {
+  var btn = document.getElementById('admin-btn');
+  var badge = document.getElementById('admin-badge');
+  var newPg = document.getElementById('btn-new-page');
+  if (isAdmin) {
+    btn.textContent = '⬡ logout';
+    btn.classList.add('active');
+    badge.style.display = 'block';
+    newPg.classList.remove('locked');
+  } else {
+    btn.textContent = '⬡ admin';
+    btn.classList.remove('active');
+    badge.style.display = 'none';
+    newPg.classList.add('locked');
+  }
+  // show/hide toolbars and admin-only elements
+  document.querySelectorAll('.edit-toolbar').forEach(function(tb) {
+    tb.classList.toggle('show', isAdmin);
+  });
+  document.querySelectorAll('.admin-only').forEach(function(el) {
+    el.style.display = isAdmin ? 'inline' : 'none';
+  });
+}
+
+// ── GENERIC EDIT MODAL ──
+var editCallback = null;
+
+function openEditModal(title, label, value, multiline, hint, callback) {
+  document.getElementById('edit-modal-title').textContent = title;
+  document.getElementById('edit-modal-label').textContent = label;
+  document.getElementById('edit-modal-hint').textContent = hint || '';
+  var single = document.getElementById('edit-single');
+  var multi  = document.getElementById('edit-multi');
+  if (multiline) {
+    single.style.display = 'none';
+    multi.style.display  = 'block';
+    multi.value = value;
+  } else {
+    multi.style.display  = 'none';
+    single.style.display = 'block';
+    single.value = value;
+  }
+  editCallback = callback;
+  openModal('modal-edit');
+  setTimeout(function() {
+    (multiline ? multi : single).focus();
+  }, 80);
+}
+
+function commitEdit() {
+  var single = document.getElementById('edit-single');
+  var multi  = document.getElementById('edit-multi');
+  var val = single.style.display !== 'none' ? single.value : multi.value;
+  closeModal('modal-edit');
+  if (editCallback) { editCallback(val); editCallback = null; }
+}
+
+// ── EDIT HEADING ──
+function editHeading(pgId) {
+  var pg = pages.find(function(p) { return p.id === pgId; });
+  if (!pg) return;
+  openEditModal('> EDIT_HEADING.SH', 'Heading text', pg.data.heading || '', false, '', function(val) {
+    if (!val.trim()) return;
+    pg.data.heading = val.trim();
+    save('pages', pages);
+    refreshPage(pgId);
+  });
+}
+
+// ── EDIT BODY (article) ──
+function editBody(pgId) {
+  var pg = pages.find(function(p) { return p.id === pgId; });
+  if (!pg) return;
+  openEditModal('> EDIT_BODY.SH', 'Body text', pg.data.body || '', true, 'Separate paragraphs with a blank line. Start lines with > for terminal style.', function(val) {
+    pg.data.body = val;
+    save('pages', pages);
+    refreshPage(pgId);
+  });
+}
+
+// ── EDIT SITE TITLE ──
+function editSiteTitle() {
+  openEditModal('> SITE_TITLE.SH', 'Site title', siteSettings.title || 'GENX SOFT CLUB', false, 'Updates the browser tab title and the top header.', function(val) {
+    if (!val.trim()) return;
+    siteSettings.title = val.trim().toUpperCase();
+    save('settings', siteSettings);
+    applySiteTitle();
+  });
+}
+
+// ── EDIT WELCOME TEXT ──
+function editWelcome() {
+  var pg = pages.find(function(p) { return p.id === 'home'; });
+  if (!pg) return;
+  openEditModal('> EDIT_WELCOME.SH', 'Welcome text', pg.data.welcome || '■ WELCOME TO MY TERMINAL ■', false, 'The large heading displayed at the top of the home page.', function(val) {
+    if (!val.trim()) return;
+    pg.data.welcome = val.trim();
+    save('pages', pages);
+    refreshPage('home');
+  });
+}
+
+// ── EDIT TAGLINE ──
+function editTagline() {
+  var pg = pages.find(function(p) { return p.id === 'home'; });
+  if (!pg) return;
+  openEditModal('> EDIT_TAGLINE.SH', 'Tagline', pg.data.tagline || '', false, 'Shown below the welcome header on the home page.', function(val) {
+    pg.data.tagline = val;
+    save('pages', pages);
+    refreshPage('home');
+  });
+}
+
+// ── BLOG POSTS ──
+function toggleAddPost(pgId) {
+  var el = document.getElementById('badd-' + pgId);
+  if (!el) return;
+  el.classList.toggle('show');
+  if (el.classList.contains('show')) {
+    var today = new Date().toISOString().split('T')[0];
+    document.getElementById('badd-date-' + pgId).value = today;
+    document.getElementById('badd-title-' + pgId).focus();
+  }
+}
+
+function submitPost(pgId) {
+  var pg = pages.find(function(p) { return p.id === pgId; });
+  if (!pg) return;
+  var date = document.getElementById('badd-date-' + pgId).value.trim();
+  var title = document.getElementById('badd-title-' + pgId).value.trim();
+  if (!date || !title) return;
+  pg.data.posts = pg.data.posts || [];
+  pg.data.posts.unshift({ date: date, title: title });
+  save('pages', pages);
+  refreshPage(pgId);
+  applyAdminUI();
+}
+
+function removePost(pgId, idx) {
+  var pg = pages.find(function(p) { return p.id === pgId; });
+  if (!pg || !pg.data.posts) return;
+  pg.data.posts.splice(idx, 1);
+  save('pages', pages);
+  refreshPage(pgId);
+  applyAdminUI();
+}
+
+// ── VIDEO URL MODAL ──
+var videoUrlTargetPage = null;
+
+function openVideoUrlModal(pgId) {
+  videoUrlTargetPage = pgId;
+  document.getElementById('vid-url-input').value = '';
+  document.getElementById('vid-url-caption').value = '';
+  document.getElementById('vid-url-error').textContent = '';
+  openModal('modal-videourl');
+  setTimeout(function() { document.getElementById('vid-url-input').focus(); }, 80);
+}
+
+function parseVideoUrl(url) {
+  var yt = url.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  if (yt) return { embedUrl: 'https://www.youtube.com/embed/' + yt[1] + '?rel=0', directUrl: null, originalUrl: url };
+  var vm = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  if (vm) return { embedUrl: 'https://player.vimeo.com/video/' + vm[1], directUrl: null, originalUrl: url };
+  if (/\.(mp4|webm|ogv|ogg|mov|m4v|mkv|avi|3gp|flv)(\?|$)/i.test(url)) return { embedUrl: null, directUrl: url, originalUrl: url };
+  if (/^https?:\/\/.+/.test(url)) return { embedUrl: null, directUrl: url, originalUrl: url };
+  return null;
+}
+
+function commitVideoUrl() {
+  var url = document.getElementById('vid-url-input').value.trim();
+  var caption = document.getElementById('vid-url-caption').value.trim();
+  var errEl = document.getElementById('vid-url-error');
+  if (!url) { errEl.textContent = '> enter a URL first'; return; }
+  var parsed = parseVideoUrl(url);
+  if (!parsed) { errEl.textContent = '> could not parse URL — check format'; return; }
+  var pg = pages.find(function(p) { return p.id === videoUrlTargetPage; });
+  if (!pg) return;
+  pg.data.images = pg.data.images || [];
+  pg.data.images.push({
+    type: 'video',
+    embedUrl: parsed.embedUrl,
+    directUrl: parsed.directUrl,
+    originalUrl: parsed.originalUrl,
+    caption: caption,
+    name: url
+  });
+  save('pages', pages);
+  closeModal('modal-videourl');
+  refreshPage(videoUrlTargetPage);
+  applyAdminUI();
+}
+
+// ── GALLERY UPLOAD ──
+function triggerUpload(pgId, type) {
+  var id = 'up-' + type.slice(0,3) + '-' + pgId;
+  var el = document.getElementById(id);
+  if (el) el.click();
+}
+
+function handleUpload(input, pgId, type) {
+  var file = input.files[0];
+  if (!file) return;
+  var pg = pages.find(function(p) { return p.id === pgId; });
+  if (!pg) return;
+  var defaultCaption = file.name.replace(/\.[^.]+$/, '');
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var src = e.target.result;
+    openEditModal('> MEDIA_CAPTION.SH', 'Caption (optional)', defaultCaption, false, 'Leave blank for no caption.', function(caption) {
+      pg.data.images = pg.data.images || [];
+      pg.data.images.push({ src: src, type: type, caption: caption.trim(), name: file.name });
+      save('pages', pages);
+      refreshPage(pgId);
+      applyAdminUI();
+    });
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+// ── FULLSCREEN ──
+function goFullscreen(videoId) {
+  var v = document.getElementById(videoId);
+  if (!v) return;
+  if (v.requestFullscreen) v.requestFullscreen();
+  else if (v.webkitRequestFullscreen) v.webkitRequestFullscreen();
+  else if (v.mozRequestFullScreen) v.mozRequestFullScreen();
+  else if (v.msRequestFullscreen) v.msRequestFullscreen();
+}
+
+function removeImage(pgId, idx) {
+  var pg = pages.find(function(p) { return p.id === pgId; });
+  if (!pg || !pg.data.images) return;
+  pg.data.images.splice(idx, 1);
+  save('pages', pages);
+  refreshPage(pgId);
+  applyAdminUI();
+}
+
+// ── REFRESH SINGLE PAGE ──
+function refreshPage(pgId) {
+  var pg = pages.find(function(p) { return p.id === pgId; });
+  if (!pg) return;
+  var div = document.getElementById('pg-' + pgId);
+  if (!div) return;
+  var wasActive = div.classList.contains('active');
+  div.innerHTML = buildPageHTML(pg);
+  if (wasActive) div.classList.add('active');
+  if (isAdmin) {
+    var tb = div.querySelector('.edit-toolbar');
+    if (tb) tb.classList.add('show');
+    div.querySelectorAll('.admin-only').forEach(function(el) { el.style.display = 'inline'; });
+  }
+}
+
+// ── NEW PAGE ──
+function openNewPage() {
+  if (!isAdmin) return;
+  selectedTpl = 'article';
+  document.querySelectorAll('.tpl-card').forEach(function(c) {
+    c.classList.toggle('sel', c.dataset.tpl === 'article');
+  });
+  document.getElementById('np-slug').value = '';
+  openModal('modal-newpage');
+  setTimeout(function(){ document.getElementById('np-slug').focus(); }, 100);
+}
+
+function selTpl(el) {
+  document.querySelectorAll('.tpl-card').forEach(function(c) { c.classList.remove('sel'); });
+  el.classList.add('sel');
+  selectedTpl = el.dataset.tpl;
+}
+
+function doCreatePage() {
+  var slug = document.getElementById('np-slug').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (!slug) { document.getElementById('np-slug').focus(); return; }
+  if (pages.find(function(p) { return p.id === slug; })) {
+    showPage(slug);
+    closeModal('modal-newpage');
+    return;
+  }
+  var pg = { id: slug, type: selectedTpl, title: slug, data: {} };
+  if (selectedTpl === 'article') {
+    pg.data = { heading: slug.toUpperCase() + '.MD', body: '> Start writing your content here.\n\n> Add more paragraphs below.' };
+  } else if (selectedTpl === 'blog') {
+    pg.data = { heading: slug.toUpperCase() + ' / INDEX', posts: [] };
+  } else if (selectedTpl === 'gallery') {
+    pg.data = { heading: slug.toUpperCase() + ' / GALLERY', images: [] };
+  }
+  pages.push(pg);
+  save('pages', pages);
+
+  // add to DOM
+  var div = document.createElement('div');
+  div.className = 'page';
+  div.id = 'pg-' + slug;
+  div.innerHTML = buildPageHTML(pg);
+  document.getElementById('pages').appendChild(div);
+
+  // add nav item
+  var li = document.createElement('li');
+  var btn = document.createElement('button');
+  btn.className = 'nav-btn';
+  btn.dataset.id = slug;
+  btn.innerHTML = '<span class="arr">&gt;</span> ' + slug;
+  btn.onclick = function() { showPage(slug); };
+  li.appendChild(btn);
+  document.getElementById('nav-list').appendChild(li);
+
+  closeModal('modal-newpage');
+  showPage(slug);
+  applyAdminUI();
+}
+
+// ── DELETE PAGE ──
+function confirmDeletePage(pgId) {
+  pageToDelete = pgId;
+  openModal('modal-delpage');
+}
+
+function doDeletePage() {
+  if (!pageToDelete) return;
+  pages = pages.filter(function(p) { return p.id !== pageToDelete; });
+  save('pages', pages);
+  var div = document.getElementById('pg-' + pageToDelete);
+  if (div) div.remove();
+  var navBtn = document.querySelector('.nav-btn[data-id="' + pageToDelete + '"]');
+  if (navBtn && navBtn.parentElement) navBtn.parentElement.remove();
+  pageToDelete = null;
+  closeModal('modal-delpage');
+  showPage('home');
+}
+
+// ── MODAL HELPERS ──
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+document.getElementById('modal-videourl').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-videourl');
+});
+document.getElementById('vid-url-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('vid-url-caption').focus();
+  if (e.key === 'Escape') closeModal('modal-videourl');
+});
+document.getElementById('vid-url-caption').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') commitVideoUrl();
+  if (e.key === 'Escape') closeModal('modal-videourl');
+});
+
+document.getElementById('modal-edit').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-edit');
+});
+document.getElementById('edit-single').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') commitEdit();
+  if (e.key === 'Escape') closeModal('modal-edit');
+});
+document.getElementById('edit-multi').addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeModal('modal-edit');
+  // Ctrl+Enter or Cmd+Enter saves
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) commitEdit();
+});
+
+document.getElementById('modal-login').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-login');
+});
+document.getElementById('modal-newpage').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-newpage');
+});
+document.getElementById('modal-delpage').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-delpage');
+});
+document.getElementById('pw-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') doLogin();
+  if (e.key === 'Escape') closeModal('modal-login');
+});
+document.getElementById('np-slug').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') doCreatePage();
+  if (e.key === 'Escape') closeModal('modal-newpage');
+});
+
+// ── BOOT ──
+renderNav();
+renderPages();
+showPage('home');
+</script>
+</body>
+</html>
