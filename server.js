@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 3000;
 
 // ── CONFIG ──
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'genx1985';
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const DATA_DIR   = process.env.DATA_DIR   || path.join(__dirname, 'data');
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 const DB_PATH    = path.join(DATA_DIR, 'site.db');
@@ -125,7 +126,7 @@ app.post('/api/data', requireAuth, function(req, res) {
 // POST /api/upload ← multipart file → { url }  [auth required]
 app.post('/api/upload', requireAuth, upload.single('file'), function(req, res) {
   if (!req.file) return res.status(400).json({ error: 'no file received' });
-  res.json({ url: '/uploads/' + req.file.filename });
+  res.json({ url: PUBLIC_URL + '/uploads/' + req.file.filename });
 });
 
 app.listen(PORT, function() {
