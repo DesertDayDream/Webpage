@@ -84,12 +84,17 @@ app.use(express.static(__dirname));
 
 // POST /api/login ← { password }
 app.post('/api/login', function(req, res) {
-  if (req.body.password !== ADMIN_PASSWORD)
-    return res.status(401).json({ error: 'wrong password' });
-  var token = crypto.randomBytes(32).toString('hex');
-  stmtAddSession.run(token);
-  res.setHeader('Set-Cookie', 'trm_session=' + token + COOKIE_FLAGS);
-  res.json({ ok: true });
+  try {
+    if (!req.body || req.body.password !== ADMIN_PASSWORD)
+      return res.status(401).json({ error: 'wrong password' });
+    var token = crypto.randomBytes(32).toString('hex');
+    stmtAddSession.run(token);
+    res.setHeader('Set-Cookie', 'trm_session=' + token + COOKIE_FLAGS);
+    res.json({ ok: true });
+  } catch(e) {
+    console.error('Login error:', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // POST /api/logout

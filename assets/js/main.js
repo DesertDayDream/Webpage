@@ -382,12 +382,12 @@ function doLogin() {
       closeModal('modal-login');
       applyAdminUI();
     } else {
-      err.textContent = '> ACCESS DENIED — wrong password';
+      err.textContent = '> ' + (res.data && res.data.error ? res.data.error : 'ACCESS DENIED');
       document.getElementById('pw-input').focus();
     }
   })
-  .catch(function() {
-    err.textContent = '> server error — try again';
+  .catch(function(e) {
+    err.textContent = '> server error: ' + (e && e.message ? e.message : 'check console');
     document.getElementById('pw-input').value = '';
   });
 }
