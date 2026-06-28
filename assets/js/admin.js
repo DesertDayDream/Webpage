@@ -216,6 +216,32 @@ function triggerUpload(pgId, type) {
   if (el) el.click();
 }
 
+function showUploadOverlay() {
+  var el = document.createElement('div');
+  el.id = 'upload-overlay';
+  el.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;font-family:monospace;';
+  el.innerHTML =
+    '<div style="color:var(--green);font-size:13px;letter-spacing:2px;">&gt; UPLOADING...</div>' +
+    '<div id="upl-pct" style="color:var(--green-bright);font-size:32px;letter-spacing:6px;">0%</div>' +
+    '<div id="upl-bar-wrap" style="width:260px;height:4px;background:var(--green-dim);border-radius:2px;">' +
+      '<div id="upl-bar" style="height:4px;width:0%;background:var(--green-bright);transition:width .1s;border-radius:2px;"></div>' +
+    '</div>';
+  document.body.appendChild(el);
+  return el;
+}
+
+function updateUploadOverlay(pct) {
+  var p = document.getElementById('upl-pct');
+  var b = document.getElementById('upl-bar');
+  if (p) p.textContent = pct + '%';
+  if (b) b.style.width = pct + '%';
+}
+
+function removeUploadOverlay() {
+  var el = document.getElementById('upload-overlay');
+  if (el) el.parentNode.removeChild(el);
+}
+
 function handleUpload(input, pgId, type) {
   var file = input.files[0];
   if (!file) return;
@@ -224,21 +250,40 @@ function handleUpload(input, pgId, type) {
   var defaultCaption = file.name.replace(/\.[^.]+$/, '');
   var formData = new FormData();
   formData.append('file', file);
-  fetch(API_BASE + '/api/upload', { method: 'POST', credentials: 'include', body: formData })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (!data.url) { alert('Upload failed'); return; }
-      openEditModal('> MEDIA_CAPTION.SH', 'Caption (optional)', defaultCaption, false,
-        'Leave blank for no caption.', function(caption) {
-        pg.data.images = pg.data.images || [];
-        pg.data.images.push({ src: data.url, type: type, caption: caption.trim(), name: file.name });
-        save('pages', pages);
-        refreshPage(pgId);
-        applyAdminUI();
-      });
-    })
-    .catch(function() { alert('Upload error — is the server running?'); });
   input.value = '';
+
+  showUploadOverlay();
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', API_BASE + '/api/upload');
+  xhr.withCredentials = true;
+
+  xhr.upload.onprogress = function(e) {
+    if (e.lengthComputable) updateUploadOverlay(Math.round(e.loaded / e.total * 100));
+  };
+
+  xhr.onload = function() {
+    removeUploadOverlay();
+    if (xhr.status !== 200) { alert('Upload failed (' + xhr.status + ')'); return; }
+    var data;
+    try { data = JSON.parse(xhr.responseText); } catch(e) { alert('Upload failed — bad response'); return; }
+    if (!data.url) { alert('Upload failed'); return; }
+    openEditModal('> MEDIA_CAPTION.SH', 'Caption (optional)', defaultCaption, false,
+      'Leave blank for no caption.', function(caption) {
+      pg.data.images = pg.data.images || [];
+      pg.data.images.push({ src: data.url, type: type, caption: caption.trim(), name: file.name });
+      save('pages', pages);
+      refreshPage(pgId);
+      applyAdminUI();
+    });
+  };
+
+  xhr.onerror = function() {
+    removeUploadOverlay();
+    alert('Upload error — check your connection or file size');
+  };
+
+  xhr.send(formData);
 }
 
 function goFullscreen(videoId) {
