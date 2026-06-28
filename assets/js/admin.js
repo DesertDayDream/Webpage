@@ -224,7 +224,7 @@ function handleUpload(input, pgId, type) {
   var defaultCaption = file.name.replace(/\.[^.]+$/, '');
   var formData = new FormData();
   formData.append('file', file);
-  fetch('/api/upload', { method: 'POST', credentials: 'include', body: formData })
+  fetch(API_BASE + '/api/upload', { method: 'POST', credentials: 'include', body: formData })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (!data.url) { alert('Upload failed'); return; }

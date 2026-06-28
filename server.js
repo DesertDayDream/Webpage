@@ -8,23 +8,23 @@ const fs       = require('fs');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// ── AUTH ──
+// ── CONFIG ──
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'genx1985';
+const DATA_DIR   = process.env.DATA_DIR   || path.join(__dirname, 'data');
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
+const DB_PATH    = path.join(DATA_DIR, 'site.db');
 
-function getToken(req) {
-  var m = (req.headers.cookie || '').match(/(?:^|;\s*)trm_session=([^;]+)/);
-  return m ? m[1] : null;
-}
-function requireAuth(req, res, next) {
-  if (stmtHasSession.get(getToken(req))) return next();
-  res.status(401).json({ error: 'unauthorized' });
-}
+// Origins allowed for cross-origin requests (comma-separated in CORS_ORIGIN env var)
+var CORS_ORIGINS = (process.env.CORS_ORIGIN || '')
+  .split(',').map(function(s) { return s.trim(); }).filter(Boolean);
 
-const DB_PATH    = path.join(__dirname, 'data', 'site.db');
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
+// Cookie flags — cross-origin needs SameSite=None; Secure
+var COOKIE_FLAGS = CORS_ORIGINS.length
+  ? '; HttpOnly; SameSite=None; Secure; Path=/'
+  : '; HttpOnly; SameSite=Strict; Path=/';
 
 // Ensure runtime directories exist
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+fs.mkdirSync(DATA_DIR,   { recursive: true });
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // SQLite
@@ -37,6 +37,29 @@ const stmtUpsert     = db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES
 const stmtAddSession = db.prepare('INSERT OR IGNORE INTO sessions (token) VALUES (?)');
 const stmtDelSession = db.prepare('DELETE FROM sessions WHERE token = ?');
 const stmtHasSession = db.prepare('SELECT 1 FROM sessions WHERE token = ?');
+
+function getToken(req) {
+  var m = (req.headers.cookie || '').match(/(?:^|;\s*)trm_session=([^;]+)/);
+  return m ? m[1] : null;
+}
+function requireAuth(req, res, next) {
+  if (stmtHasSession.get(getToken(req))) return next();
+  res.status(401).json({ error: 'unauthorized' });
+}
+
+// ── CORS ──
+app.use(function(req, res, next) {
+  var origin = req.headers.origin || '';
+  var isLocal = /^https?:\/\/localhost(:\d+)?$/.test(origin);
+  if (origin && (isLocal || CORS_ORIGINS.includes(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 // File upload — unique timestamped filenames, preserve extension
 const storage = multer.diskStorage({
@@ -64,18 +87,18 @@ app.post('/api/login', function(req, res) {
     return res.status(401).json({ error: 'wrong password' });
   var token = crypto.randomBytes(32).toString('hex');
   stmtAddSession.run(token);
-  res.setHeader('Set-Cookie', 'trm_session=' + token + '; HttpOnly; SameSite=Strict; Path=/');
+  res.setHeader('Set-Cookie', 'trm_session=' + token + COOKIE_FLAGS);
   res.json({ ok: true });
 });
 
 // POST /api/logout
 app.post('/api/logout', function(req, res) {
   stmtDelSession.run(getToken(req));
-  res.setHeader('Set-Cookie', 'trm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+  res.setHeader('Set-Cookie', 'trm_session=' + COOKIE_FLAGS + '; Max-Age=0');
   res.json({ ok: true });
 });
 
-// GET /api/auth-check — lets the frontend verify its session is still valid
+// GET /api/auth-check
 app.get('/api/auth-check', function(req, res) {
   res.json({ admin: !!stmtHasSession.get(getToken(req)) });
 });

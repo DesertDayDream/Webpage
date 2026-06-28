@@ -1,4 +1,6 @@
 // ── CONFIG ──
+var API_BASE = (typeof window !== 'undefined' && window.SITE_API_BASE) ? window.SITE_API_BASE : '';
+
 var STATIC_PAGES = {
   home:    'index.html',
   about:   'about.html',
@@ -21,7 +23,7 @@ var siteSettings = { title: 'TERMINAL' };
 function save(key, val) {
   if (key === 'pages')    pages = val;
   if (key === 'settings') siteSettings = val;
-  fetch('/api/data', {
+  fetch(API_BASE + '/api/data', {
     method:      'POST',
     credentials: 'include',
     headers:     { 'Content-Type': 'application/json' },
@@ -364,7 +366,7 @@ function toggleAdmin() {
 function doLogin() {
   var pw  = document.getElementById('pw-input').value;
   var err = document.getElementById('pw-error');
-  fetch('/api/login', {
+  fetch(API_BASE + '/api/login', {
     method:      'POST',
     credentials: 'include',
     headers:     { 'Content-Type': 'application/json' },
@@ -391,7 +393,7 @@ function doLogin() {
 }
 
 function logoutAdmin() {
-  fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(function() {});
+  fetch(API_BASE + '/api/logout', { method: 'POST', credentials: 'include' }).catch(function() {});
   isAdmin = false;
   sessionStorage.removeItem('trm_admin');
   applyAdminUI();
@@ -429,7 +431,7 @@ function closeModal(id) {
 }
 
 // ── BOOT (async — loads data from server before rendering) ──
-var initPromise = fetch('/api/data')
+var initPromise = fetch(API_BASE + '/api/data')
   .then(function(r) { return r.json(); })
   .then(function(data) {
     pages        = data.pages    || null;
@@ -441,7 +443,7 @@ var initPromise = fetch('/api/data')
     applyPageOverrides();
     // If browser thinks we're admin, verify the session is still live on the server
     if (isAdmin) {
-      fetch('/api/auth-check', { credentials: 'include' })
+      fetch(API_BASE + '/api/auth-check', { credentials: 'include' })
         .then(function(r) { return r.json(); })
         .then(function(d) {
           if (!d.admin) {
