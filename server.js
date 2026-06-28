@@ -78,6 +78,7 @@ const upload = multer({
 // Middleware
 app.use(express.json({ limit: '50mb' }));
 app.use('/uploads', express.static(UPLOAD_DIR));
+app.use('/data', function(req, res) { res.status(403).end(); }); // block DB from public access
 app.use(express.static(__dirname));
 
 // ── API ──
