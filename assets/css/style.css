@@ -4,26 +4,26 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --green:        #7a9e7e;
-  --green-dim:    #4a6b4e;
-  --green-bright: #9db89f;
-  --green-faint:  rgba(122,158,126,0.07);
+  --green:        #7a9eb8;
+  --green-dim:    #4a6b8a;
+  --green-bright: #9dbdd4;
+  --green-faint:  rgba(122,158,184,0.07);
   --amber:        #b08050;
   --red:          #a05a52;
-  --bg:           #1a1a18;
+  --bg:           #161820;
   --scanline:     transparent;
   --glow:         none;
   --glow-dim:     none;
   --mono:         'IBM Plex Mono', monospace;
   --vt:           'Space Grotesk', sans-serif;
 
-  --surface:      #222220;
-  --surface-2:    #2a2a27;
-  --border:       rgba(122,158,126,0.18);
-  --border-mid:   rgba(122,158,126,0.30);
-  --text-body:    #c8c4b8;
-  --text-dim:     #7a7568;
-  --text-meta:    #545048;
+  --surface:      #1e2028;
+  --surface-2:    #252830;
+  --border:       rgba(122,158,184,0.18);
+  --border-mid:   rgba(122,158,184,0.32);
+  --text-body:    #c8c6d0;
+  --text-dim:     #72707e;
+  --text-meta:    #4e4c58;
   --accent-warm:  #c4a882;
   --radius:       2px;
 }
