@@ -2151,42 +2151,53 @@ function drawMpBrowseScreen(ctx) {
     return;
   }
 
+  // Action buttons are anchored to the bottom of the screen (not stacked
+  // after however many lobbies happen to be listed) so they're always
+  // visible/clickable no matter how many lobbies are open at once.
+  const bw = 220, bh = 44, bx = CW/2 - bw/2;
+  const bottomMargin = 56; // room for the error message below the last button
+  const backY   = CH - bottomMargin - 40;
+  const lbY     = backY - 40 - 12;
+  const editY   = lbY - 40 - 12;
+  const createY = editY - bh - 12;
+
   const rowW = 480, rowH = 40, rowX = CW/2 - rowW/2;
   let rowY = 96;
   if (mpLobbies.length === 0) {
     ctx.fillStyle = '#5a5870';
     ctx.font = '16px VT323, monospace';
     ctx.fillText('No lobbies yet — be the first to host one.', CW/2, rowY + 20);
-    rowY += 44;
   } else {
-    mpLobbies.slice(0, 8).forEach(l => {
+    const maxRows = Math.max(1, Math.floor((createY - 16 - rowY) / (rowH + 8)));
+    const visible = mpLobbies.slice(0, maxRows);
+    visible.forEach(l => {
       uiButton(ctx, rowX, rowY, rowW, rowH,
         l.name + '   (' + l.hostName + ')   ' + l.playerCount + '/' + l.maxPlayers,
         () => { Net.send('join', { lobbyId: l.id }); },
         { font: '15px VT323, monospace' });
       rowY += rowH + 8;
     });
+    if (mpLobbies.length > visible.length) {
+      ctx.fillStyle = '#5a5870';
+      ctx.font = '13px VT323, monospace';
+      ctx.fillText('+ ' + (mpLobbies.length - visible.length) + ' more lobbies not shown', CW/2, rowY + 12);
+    }
   }
 
-  rowY += 16;
-  const bw = 220, bh = 44, bx = CW/2 - bw/2;
-  uiButton(ctx, bx, rowY, bw, bh, '[ + CREATE LOBBY ]', () => {
+  uiButton(ctx, bx, createY, bw, bh, '[ + CREATE LOBBY ]', () => {
     TextEntry.start(mpPlayerName() + "'s Lobby", 24, name => {
       Net.send('create', { name: (name || '').trim() || 'New Lobby' });
     }, () => {});
   });
-  rowY += bh + 12;
-  uiButton(ctx, bx, rowY, bw, 40, '[ EDIT CHARACTER ]', () => { window.open('character-editor.html', '_blank'); });
-  rowY += 40 + 12;
-  uiButton(ctx, bx, rowY, bw, 40, '[ LEADERBOARD ]', () => {
+  uiButton(ctx, bx, editY, bw, 40, '[ EDIT CHARACTER ]', () => { window.open('character-editor.html', '_blank'); });
+  uiButton(ctx, bx, lbY, bw, 40, '[ LEADERBOARD ]', () => {
     justSavedIndex = -1;
     STATE = 'mpLeaderboard';
     mpLeaderboardEntries = [];
     mpLeaderboardLoading = true;
     loadLeaderboard(LB_BOARD_MP).then(entries => { mpLeaderboardEntries = entries; mpLeaderboardLoading = false; });
   });
-  rowY += 40 + 12;
-  uiButton(ctx, bx, rowY, bw, 40, '[ BACK ]', () => { Net.close(); STATE = 'start'; });
+  uiButton(ctx, bx, backY, bw, 40, '[ BACK ]', () => { Net.close(); STATE = 'start'; });
 
   if (mpErrorMsg && Date.now() < mpErrorUntil) {
     ctx.fillStyle = '#c84040';
