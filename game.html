@@ -2422,33 +2422,37 @@ function drawDeadScreen(ctx) {
 
   ctx.fillStyle = '#c84040';
   ctx.font = '64px VT323, monospace';
-  ctx.fillText(mainTimer <= 0 ? 'TIME UP' : 'MISSION FAILED', CW/2, CH/2 - 100);
+  ctx.fillText(mainTimer <= 0 ? 'TIME UP' : 'MISSION FAILED', CW/2, CH/2 - 130);
 
   ctx.fillStyle = '#c8a840';
   ctx.font = '28px VT323, monospace';
-  ctx.fillText('SCORE:  ' + score, CW/2, CH/2 - 40);
-  ctx.fillText('PEAK COMBO:  x' + peakCombo, CW/2, CH/2);
+  ctx.fillText('SCORE:  ' + score, CW/2, CH/2 - 80);
+  ctx.fillText('PEAK COMBO:  x' + peakCombo, CW/2, CH/2 - 44);
 
   if (score >= highScore && score > 0) {
     ctx.fillStyle = '#f0e040';
     ctx.font = '22px VT323, monospace';
-    ctx.fillText('★  NEW HIGH SCORE  ★', CW/2, CH/2 + 40);
+    ctx.fillText('★  NEW HIGH SCORE  ★', CW/2, CH/2 - 8);
   } else if (highScore > 0) {
     ctx.fillStyle = '#5a5870';
     ctx.font = '18px VT323, monospace';
-    ctx.fillText('HIGH SCORE:  ' + highScore, CW/2, CH/2 + 40);
+    ctx.fillText('HIGH SCORE:  ' + highScore, CW/2, CH/2 - 8);
   }
 
-  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
-  ctx.globalAlpha = pulse;
-  ctx.fillStyle = '#3ef83e';
-  ctx.font = '26px VT323, monospace';
-  ctx.fillText('CLICK OR PRESS ENTER TO RESTART', CW/2, CH/2 + 90);
-  ctx.globalAlpha = 1;
+  const bw = 200, bh = 44, bx = CW/2 - bw/2;
+  let by = CH/2 + 30;
+  uiButton(ctx, bx, by, bw, bh, '[ RESTART ]', () => startGame());
+  by += bh + 12;
+  uiButton(ctx, bx, by, bw, 40, '[ LEADERBOARD ]', () => {
+    justSavedIndex = -1;
+    STATE = 'leaderboard';
+    leaderboardEntries = [];
+    leaderboardLoading = true;
+    loadLeaderboard(LB_BOARD_SP).then(entries => { leaderboardEntries = entries; leaderboardLoading = false; });
+  });
+  by += 40 + 12;
+  uiButton(ctx, bx, by, bw, 40, '[ MAIN MENU ]', () => { STATE = 'start'; });
 
-  ctx.fillStyle = '#5a5870';
-  ctx.font = '14px VT323, monospace';
-  ctx.fillText('PRESS L FOR LEADERBOARD', CW/2, CH/2 + 118);
   ctx.textAlign = 'left';
 }
 
@@ -2748,7 +2752,7 @@ canvas.addEventListener('click', e => {
   const cy = (e.clientY - r.top)  * (CH / r.height);
   const hit = uiButtons.find(b => cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h);
   if (hit) { hit.action(); return; }
-  if (STATE === 'dead' || STATE === 'leaderboard') startGame();
+  if (STATE === 'leaderboard') startGame();
 });
 window.addEventListener('keydown', e => {
   Music.start();
@@ -2772,6 +2776,7 @@ window.addEventListener('keydown', e => {
     return;
   }
   if (e.key === 'Enter' && (STATE === 'start' || STATE === 'dead')) startGame();
+  if (e.key === 'Escape' && STATE === 'dead') STATE = 'start';
   if (e.key === 'Escape' && STATE === 'mpBrowse') { Net.close(); STATE = 'start'; }
   if (e.key === 'Escape' && STATE === 'mpLobby') {
     Net.send('leave');
