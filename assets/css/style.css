@@ -93,6 +93,7 @@ html, body {
   letter-spacing: 2px;
   font-variant-numeric: tabular-nums;
 }
+#mercs-btn,
 #admin-btn {
   background: none;
   border: 1px solid var(--border);
@@ -105,6 +106,10 @@ html, body {
   text-transform: uppercase;
   transition: border-color .2s, color .2s;
   border-radius: var(--radius);
+}
+#mercs-btn:hover {
+  border-color: var(--green-bright);
+  color: var(--green-bright);
 }
 #admin-btn:hover {
   border-color: var(--amber);

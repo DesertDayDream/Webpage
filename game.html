@@ -1,0 +1,2163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MERCS — Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#0d0b12;
+    display:flex; align-items:center; justify-content:center;
+    height:100vh; overflow:hidden;
+    font-family:'VT323', monospace;
+  }
+  #wrap { position:relative; width:800px; height:600px; }
+  #game-canvas {
+    display:block; width:800px; height:600px;
+    image-rendering:pixelated; cursor:crosshair;
+  }
+  /* Overlay panels drawn on canvas; pure canvas-only game */
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game-canvas" width="800" height="600"></canvas></div>
+<script>
+'use strict';
+
+// === CONSTANTS ===
+
+const CW = 800, CH = 600; // fixed viewport/screen size — the world can be bigger
+const TS = 32; // tile size for floor grid (visual only), also the map editor's grid snap
+const camera = { x: 0, y: 0 };
+const CAMERA_LERP = 6;
+
+const PLAYER_SIZE      = 22;
+const MELEE_ARC        = Math.PI * 0.65;
+const COMBO_TIMEOUT    = 5000;
+const MELEE_TIME_BONUS = 5;
+const RESERVE_AMMO_CAP = 200;
+
+// CONFIG — default values overridden by devtool (mercs_constants in localStorage)
+const _C_DEFAULTS = {
+  PLAYER:        { speed:190, hp:100 },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0 },
+  WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
+  ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100 },
+  ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100 },
+  ENEMY_BRUTE:   { speed:36,  hp:220, dmg:28,  score:350, size:30, unlockAt:60, spawnChance:100 },
+  PICKUP_AMMO:   { dropChance:28, amountMin:5,  amountMax:10 },
+  PICKUP_HEALTH: { dropChance:14, healMin:20,   healMax:40   },
+  PICKUP_WEAPON: { dropChance:8 },
+};
+const CONFIG = (function() {
+  const c = JSON.parse(JSON.stringify(_C_DEFAULTS));
+  try {
+    const s = JSON.parse(localStorage.getItem('mercs_constants') || '{}');
+    Object.keys(s).forEach(k => { if (c[k]) Object.assign(c[k], s[k]); });
+  } catch(e) {}
+  return c;
+})();
+
+// Equipped weapon — set via the "EQUIP" toggle in devtool.html (mercs_equipped_ranged/melee).
+// Custom weapons added in the devtool aren't in _C_DEFAULTS, so fall back to the
+// base weapon's stat shape and overlay whatever constants were saved under the
+// equipped weapon's own name. An explicit `overrideName` is used when a weapon
+// pickup swaps the active weapon mid-run instead of the devtool-configured one.
+function resolveEquippedWeapon(category, overrideName) {
+  const baseName = category === 'ranged' ? 'WEAPON_PISTOL' : 'WEAPON_KNIFE';
+  const name = overrideName || localStorage.getItem('mercs_equipped_' + category) || baseName;
+  const cfg = Object.assign({}, _C_DEFAULTS[baseName]);
+  try {
+    const saved = JSON.parse(localStorage.getItem('mercs_constants') || '{}');
+    if (saved[name]) Object.assign(cfg, saved[name]);
+  } catch(e) {}
+  cfg.name = name;
+  return cfg;
+}
+const EQUIPPED_RANGED = resolveEquippedWeapon('ranged');
+const EQUIPPED_MELEE  = resolveEquippedWeapon('melee');
+
+// Weapon drop loot pool — set via the "LOOT POOL" toggle in devtool.html (mercs_loot_pool).
+function loadLootPool() {
+  try { return JSON.parse(localStorage.getItem('mercs_loot_pool') || '{}'); } catch(e) { return {}; }
+}
+function lootPoolEntries() {
+  const pool = loadLootPool();
+  const entries = [];
+  (pool.ranged || []).forEach(name => entries.push({ name, category:'ranged' }));
+  (pool.melee  || []).forEach(name => entries.push({ name, category:'melee'  }));
+  return entries;
+}
+
+// Active enemies — set via the "ACTIVE" toggle in devtool.html (mercs_active_enemies).
+// No saved list yet (feature never touched) preserves the original always-on trio so
+// existing runs don't silently lose enemies.
+function loadActiveEnemyNames() {
+  try {
+    const raw = localStorage.getItem('mercs_active_enemies');
+    if (raw === null) return ['ENEMY_BASIC', 'ENEMY_FAST', 'ENEMY_BRUTE'];
+    return JSON.parse(raw);
+  } catch(e) { return ['ENEMY_BASIC', 'ENEMY_FAST', 'ENEMY_BRUTE']; }
+}
+
+const ENEMY_BASE_COLORS = { ENEMY_BASIC:'#c04040', ENEMY_FAST:'#e07830', ENEMY_BRUTE:'#7840c0' };
+
+// Custom enemies added in the devtool aren't in _C_DEFAULTS, so fall back to
+// ENEMY_BASIC's stat shape and overlay whatever constants were saved under the
+// enemy's own name — same pattern as resolveEquippedWeapon().
+function resolveEnemyDef(name) {
+  const baseName = _C_DEFAULTS[name] ? name : 'ENEMY_BASIC';
+  const cfg = Object.assign({}, _C_DEFAULTS[baseName]);
+  try {
+    const saved = JSON.parse(localStorage.getItem('mercs_constants') || '{}');
+    if (saved[name]) Object.assign(cfg, saved[name]);
+  } catch(e) {}
+  cfg.name = name;
+  cfg.color = ENEMY_BASE_COLORS[name] || '#c04040';
+  return cfg;
+}
+
+const ENEMY_DEFS = {};
+loadActiveEnemyNames().forEach(name => { ENEMY_DEFS[name] = resolveEnemyDef(name); });
+
+// Map — editable via map-editor.html (mercs_map in localStorage). Border walls are
+// always auto-generated to fully enclose whatever size is configured; only the
+// interior obstacles below are ever hand-placed/saved.
+const BORDER_THICKNESS = 22;
+const MAP_DEFAULTS = {
+  width: CW, height: CH,
+  playerStart: { x: CW/2, y: CH/2 },
+  walls: [
+    // Corner pillars
+    {x:80,  y:80,  w:56, h:56},
+    {x:664, y:80,  w:56, h:56},
+    {x:80,  y:464, w:56, h:56},
+    {x:664, y:464, w:56, h:56},
+    // Centre block
+    {x:364, y:264, w:72, h:72},
+    // Crates mid-field
+    {x:220, y:190, w:42, h:42},
+    {x:538, y:190, w:42, h:42},
+    {x:220, y:368, w:42, h:42},
+    {x:538, y:368, w:42, h:42},
+  ],
+};
+
+function borderWalls(w, h) {
+  const bt = BORDER_THICKNESS;
+  return [
+    {x:0,   y:0,   w:w,  h:bt},
+    {x:0,   y:h-bt,w:w,  h:bt},
+    {x:0,   y:0,   w:bt, h:h },
+    {x:w-bt,y:0,   w:bt, h:h },
+  ];
+}
+
+function loadMapConfig() {
+  try {
+    const raw = localStorage.getItem('mercs_map');
+    if (raw === null) return MAP_DEFAULTS;
+    const cfg = JSON.parse(raw);
+    return {
+      width:  Math.max(CW, cfg.width  || MAP_DEFAULTS.width),
+      height: Math.max(CH, cfg.height || MAP_DEFAULTS.height),
+      walls: Array.isArray(cfg.walls) ? cfg.walls : MAP_DEFAULTS.walls,
+      playerStart: cfg.playerStart || MAP_DEFAULTS.playerStart,
+    };
+  } catch(e) { return MAP_DEFAULTS; }
+}
+
+const MAP_CONFIG = loadMapConfig();
+const MAP_W = MAP_CONFIG.width, MAP_H = MAP_CONFIG.height;
+const WALLS = [...borderWalls(MAP_W, MAP_H), ...MAP_CONFIG.walls];
+
+const HS_KEY = 'mercs_highscore';
+const LB_KEY  = 'mercs_leaderboard';
+const LB_MAX  = 10;
+
+// === SPRITE SYSTEM ===
+
+// Programmatic draw functions — each receives (ctx, w, h) with transform already applied
+
+function _playerSprite(dx, dy) {
+  return function(ctx, w, h) {
+    const cx = w/2, cy = h/2, hd = 4;
+    ctx.fillStyle = '#2a6e2a';
+    ctx.beginPath(); ctx.ellipse(cx,cy, w/2-2, h/2-2, 0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#4ec94e';
+    ctx.beginPath(); ctx.ellipse(cx,cy, w/2-5, h/2-5, 0,0,Math.PI*2); ctx.fill();
+    const hx = cx + dx*hd, hy = cy + dy*hd;
+    ctx.fillStyle = '#7ef07e';
+    ctx.beginPath(); ctx.ellipse(hx, hy, 5, 4, Math.atan2(dy,dx), 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(hx+dx*4, hy+dy*4, 1.5, 0, Math.PI*2); ctx.fill();
+  };
+}
+const _D = 0.7071;
+
+const SPRITE_FNS = {
+  PLAYER_E:  _playerSprite( 1,   0),
+  PLAYER_SE: _playerSprite( _D,  _D),
+  PLAYER_S:  _playerSprite( 0,   1),
+  PLAYER_SW: _playerSprite(-_D,  _D),
+  PLAYER_W:  _playerSprite(-1,   0),
+  PLAYER_NW: _playerSprite(-_D, -_D),
+  PLAYER_N:  _playerSprite( 0,  -1),
+  PLAYER_NE: _playerSprite( _D, -_D),
+  ENEMY_BASIC(ctx, w, h) {
+    ctx.fillStyle = '#8a1818';
+    ctx.fillRect(2,2,w-4,h-4);
+    ctx.fillStyle = '#c04040';
+    ctx.fillRect(4,4,w-8,h-8);
+    // Eyes
+    ctx.fillStyle = '#f0f040';
+    ctx.fillRect(w/2-6,h/2-4,5,5);
+    ctx.fillRect(w/2+1,h/2-4,5,5);
+    // Mouth
+    ctx.fillStyle = '#f04040';
+    ctx.fillRect(w/2-5,h/2+3,10,3);
+  },
+  ENEMY_FAST(ctx, w, h) {
+    ctx.fillStyle = '#a04010';
+    ctx.beginPath(); ctx.moveTo(w/2,2); ctx.lineTo(w-2,h-2); ctx.lineTo(2,h-2); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#e07830';
+    ctx.beginPath(); ctx.moveTo(w/2,6); ctx.lineTo(w-6,h-6); ctx.lineTo(6,h-6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(w/2-2,h/2,4,4);
+  },
+  ENEMY_BRUTE(ctx, w, h) {
+    ctx.fillStyle = '#3a1060';
+    ctx.fillRect(0,0,w,h);
+    ctx.fillStyle = '#7840c0';
+    ctx.fillRect(3,3,w-6,h-6);
+    ctx.fillStyle = '#c080ff';
+    ctx.fillRect(6,6,w-12,h-12);
+    // horns
+    ctx.fillStyle = '#4a1880';
+    ctx.fillRect(4,0,8,10); ctx.fillRect(w-12,0,8,10);
+    // eyes
+    ctx.fillStyle = '#ff4040';
+    ctx.fillRect(w/2-7,h/2-4,6,6);
+    ctx.fillRect(w/2+1,h/2-4,6,6);
+  },
+  WEAPON_PISTOL(ctx, w, h) {
+    ctx.fillStyle = '#3a3848';
+    ctx.fillRect(2,h/2-4,w-4,8);
+    ctx.fillStyle = '#5a5870';
+    ctx.fillRect(2,h/2-3,w-8,6);
+    ctx.fillStyle = '#8a8898';
+    ctx.fillRect(w-8,h/2-2,8,4);
+  },
+  WEAPON_KNIFE(ctx, w, h) {
+    ctx.fillStyle = '#b0b8c8';
+    ctx.beginPath();
+    ctx.moveTo(w/2,4); ctx.lineTo(w/2+5,h*0.6); ctx.lineTo(w/2-5,h*0.6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#e8eef8';
+    ctx.beginPath();
+    ctx.moveTo(w/2,6); ctx.lineTo(w/2+2,h*0.55); ctx.lineTo(w/2-1,h*0.55); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#786040';
+    ctx.fillRect(w/2-8,h*0.6-2,16,5);
+    ctx.fillStyle = '#5a3820';
+    ctx.fillRect(w/2-4,h*0.6+3,8,h*0.3);
+    ctx.fillStyle = '#3a2410';
+    for (let i=0;i<3;i++) ctx.fillRect(w/2-4,h*0.6+5+i*6,8,2);
+  },
+  PICKUP_AMMO(ctx, w, h) {
+    ctx.fillStyle = '#6a5018';
+    ctx.fillRect(2,3,w-4,h-6);
+    ctx.fillStyle = '#c8a840';
+    ctx.fillRect(4,5,w-8,h-10);
+    ctx.fillStyle = '#f0d060';
+    ctx.fillRect(6,7,w-12,4);
+  },
+  PICKUP_HEALTH(ctx, w, h) {
+    // Red cross on dark background
+    ctx.fillStyle = '#3a0808';
+    ctx.beginPath(); ctx.arc(w/2,h/2,w/2-1,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#e03030';
+    ctx.beginPath(); ctx.arc(w/2,h/2,w/2-3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#f8f8f8';
+    ctx.fillRect(w/2-2, 4, 4, h-8);
+    ctx.fillRect(4, h/2-2, w-8, 4);
+  },
+};
+
+// === FACING & WEAPON SYSTEM ===
+
+const FACING_DIRS = ['E','SE','S','SW','W','NW','N','NE'];
+function getFacingDir(rawAngle) {
+  const a = ((rawAngle % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
+  return FACING_DIRS[Math.round(a / (Math.PI/4)) % 8];
+}
+
+const HAND_ANCHORS = {
+  N:  { x:  5, y: -3 },
+  NE: { x:  6, y: -2 },
+  E:  { x:  6, y:  2 },
+  SE: { x:  5, y:  5 },
+  S:  { x: -4, y:  6 },
+  SW: { x: -6, y:  4 },
+  W:  { x: -6, y:  2 },
+  NW: { x: -5, y: -2 },
+};
+
+const GUN_LENGTH = 14;
+const GUN_W = 20, GUN_H = 7;
+
+// Sprite registry — may be overridden by uploaded images
+const SPRITES = {
+  _images: {},
+  _anims:  {},  // name → { frames:[], fps:12, frame:0, timer:0 }
+
+  load() {
+    const names = Object.keys(SPRITE_FNS); // includes PICKUP_HEALTH
+    // Equipped weapon, and any weapon in the loot pool, may be a custom one added
+    // in devtool (not in SPRITE_FNS) — still check for an uploaded sprite so it
+    // renders correctly whether worn or found as a drop.
+    if (!names.includes(EQUIPPED_RANGED.name)) names.push(EQUIPPED_RANGED.name);
+    lootPoolEntries().forEach(entry => { if (!names.includes(entry.name)) names.push(entry.name); });
+    Object.keys(ENEMY_DEFS).forEach(name => { if (!names.includes(name)) names.push(name); });
+    names.forEach(name => {
+      const key = 'sprite_' + name;
+      const framesKey = 'sprite_' + name + '_frames';
+      const fpsKey    = 'sprite_' + name + '_fps';
+      const framesRaw = localStorage.getItem(framesKey);
+      if (framesRaw) {
+        try {
+          const urls = JSON.parse(framesRaw);
+          const fps  = parseInt(localStorage.getItem(fpsKey) || '12');
+          const frames = urls.map(url => { const img = new Image(); img.src = url; return img; });
+          this._anims[name] = { frames, fps, frame:0, timer:0 };
+          return;
+        } catch(e) {}
+      }
+      const url = localStorage.getItem(key);
+      if (url) {
+        const img = new Image();
+        img.src = url;
+        this._images[name] = img;
+      }
+    });
+  },
+
+  updateAnims(dt) {
+    for (const [name, anim] of Object.entries(this._anims)) {
+      anim.timer += dt;
+      if (anim.timer >= 1 / anim.fps) {
+        anim.timer -= 1 / anim.fps;
+        anim.frame = (anim.frame + 1) % anim.frames.length;
+      }
+    }
+  },
+
+  draw(name, ctx, cx, cy, w, h, angle, fallback) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (angle) ctx.rotate(angle);
+    ctx.translate(-w/2, -h/2);
+
+    const anim = this._anims[name];
+    const img  = this._images[name];
+    if (anim && anim.frames[anim.frame] && anim.frames[anim.frame].complete) {
+      ctx.drawImage(anim.frames[anim.frame], 0, 0, w, h);
+    } else if (img && img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, 0, 0, w, h);
+    } else if (SPRITE_FNS[name]) {
+      SPRITE_FNS[name](ctx, w, h);
+    } else if (fallback && SPRITE_FNS[fallback]) {
+      // Custom sprite (e.g. a devtool-added enemy) with no uploaded art yet —
+      // draw the base category's default shape until one is uploaded.
+      SPRITE_FNS[fallback](ctx, w, h);
+    }
+    ctx.restore();
+  },
+};
+
+// === INPUT ===
+
+const keys = new Set();
+const mouse = { x: CW/2, y: CH/2, worldX: CW/2, worldY: CH/2, leftDown: false, rightDown: false };
+let shootQueued = false;
+let meleeQueued = false;
+let reloadQueued = false;
+
+window.addEventListener('keydown', e => {
+  keys.add(e.key.toLowerCase());
+  if (e.key === ' ') { e.preventDefault(); shootQueued = true; }
+  if (e.key.toLowerCase() === 'f') meleeQueued = true;
+  if (e.key.toLowerCase() === 'r') reloadQueued = true;
+});
+window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+
+const canvas = document.getElementById('game-canvas');
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * (CW / r.width);
+  mouse.y = (e.clientY - r.top)  * (CH / r.height);
+  mouse.worldX = mouse.x + camera.x;
+  mouse.worldY = mouse.y + camera.y;
+});
+canvas.addEventListener('mousedown', e => {
+  // Gated so a click on a menu button (Start, a lobby row, etc.) can't leave a
+  // stale shootQueued/meleeQueued armed for the first frame of the next match.
+  if (STATE === 'playing' || STATE === 'mpPlaying') {
+    if (e.button === 0) { shootQueued = true; mouse.leftDown = true; }
+    if (e.button === 2) { meleeQueued = true; mouse.rightDown = true; }
+  }
+  e.preventDefault();
+});
+canvas.addEventListener('mouseup', e => {
+  if (e.button === 0) mouse.leftDown = false;
+  if (e.button === 2) mouse.rightDown = false;
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// === COLLISION ===
+
+function rectsOverlap(ax,ay,aw,ah, bx,by,bw,bh) {
+  return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+}
+
+function resolveWalls(cx, cy, size) {
+  const half = size / 2;
+  let nx = cx, ny = cy;
+  for (const w of WALLS) {
+    const ox1 = nx - half, oy1 = ny - half;
+    if (!rectsOverlap(ox1,oy1,size,size, w.x,w.y,w.w,w.h)) continue;
+    const overX = Math.min(ox1+size - w.x, w.x+w.w - ox1);
+    const overY = Math.min(oy1+size - w.y, w.y+w.h - oy1);
+    if (overX < overY) nx += (nx < w.x + w.w/2) ? -overX : overX;
+    else               ny += (ny < w.y + w.h/2)  ? -overY : overY;
+  }
+  return { nx, ny };
+}
+
+function pointInWall(px, py) {
+  return WALLS.some(w => px>=w.x && px<=w.x+w.w && py>=w.y && py<=w.y+w.h);
+}
+
+// === GAME STATE ===
+
+// 'start' | 'playing' | 'dead' | 'enterInitials' | 'leaderboard' | 'settings' |
+// 'mpConnect' | 'mpName' | 'mpBrowse' | 'mpLobby' | 'mpPlaying' | 'mpEnded'
+let STATE = 'start';
+
+const player = {
+  x:MAP_CONFIG.playerStart.x, y:MAP_CONFIG.playerStart.y,
+  hp:CONFIG.PLAYER.hp, maxHp:CONFIG.PLAYER.hp,
+  mag:0, reserve:0, // magazine / reserve ammo split — set by startGame()
+  reloading:false, reloadTimer:0,
+  rawAngle: 0,
+  facing: 'S',
+  meleeCd:0,
+  fireCd:0, // time until the weapon can cycle again, like a real firearm's rate of fire
+  flashTimer:0,
+  invincible:0, // brief invincibility after hit
+};
+
+let enemies  = [];
+let bullets  = [];
+let pickups  = [];
+let particles= [];
+let flashes  = []; // { text, x, y, color, timer, maxTimer }
+
+let score     = 0;
+let combo     = 0;
+let comboTimer= 0;
+let comboMilestone = '';
+let comboMilestoneTimer = 0;
+let mainTimer = 150;
+let elapsed   = 0;
+let spawnTimer= 0;
+let spawnRate = 3.0;
+let highScore = parseInt(localStorage.getItem(HS_KEY) || '0');
+let peakCombo = 0;
+
+// === LEADERBOARD ===
+
+let pendingScore    = 0;
+let initials        = ['A','A','A'];
+let initialsCursor  = 0;
+let leaderboardEntries = [];
+let justSavedIndex  = -1;
+
+function loadLeaderboard() {
+  try { return JSON.parse(localStorage.getItem(LB_KEY) || '[]'); } catch(e) { return []; }
+}
+
+function qualifiesForLeaderboard(s) {
+  if (s <= 0) return false;
+  const lb = loadLeaderboard();
+  return lb.length < LB_MAX || s > lb[lb.length - 1].score;
+}
+
+function addLeaderboardEntry(name, s) {
+  const lb = loadLeaderboard();
+  lb.push({ initials: name, score: s });
+  lb.sort((a, b) => b.score - a.score);
+  const trimmed = lb.slice(0, LB_MAX);
+  localStorage.setItem(LB_KEY, JSON.stringify(trimmed));
+  return trimmed;
+}
+
+function cycleLetter(cur, dir) {
+  const base = 'A'.charCodeAt(0);
+  const idx = ((cur.charCodeAt(0) - base) + dir + 26) % 26;
+  return String.fromCharCode(base + idx);
+}
+
+function handleInitialsKey(e) {
+  const k = e.key;
+  if (/^[a-zA-Z]$/.test(k)) {
+    initials[initialsCursor] = k.toUpperCase();
+    initialsCursor = Math.min(2, initialsCursor + 1);
+    e.preventDefault();
+  } else if (k === 'ArrowUp') {
+    initials[initialsCursor] = cycleLetter(initials[initialsCursor], 1);
+    e.preventDefault();
+  } else if (k === 'ArrowDown') {
+    initials[initialsCursor] = cycleLetter(initials[initialsCursor], -1);
+    e.preventDefault();
+  } else if (k === 'ArrowLeft') {
+    initialsCursor = Math.max(0, initialsCursor - 1);
+    e.preventDefault();
+  } else if (k === 'ArrowRight') {
+    initialsCursor = Math.min(2, initialsCursor + 1);
+    e.preventDefault();
+  } else if (k === 'Backspace') {
+    initialsCursor = Math.max(0, initialsCursor - 1);
+    e.preventDefault();
+  } else if (k === 'Enter') {
+    const name = initials.join('');
+    leaderboardEntries = addLeaderboardEntry(name, pendingScore);
+    justSavedIndex = leaderboardEntries.findIndex(en => en.initials === name && en.score === pendingScore);
+    STATE = 'leaderboard';
+    e.preventDefault();
+  } else if (k === 'Escape') {
+    STATE = 'dead';
+    e.preventDefault();
+  }
+}
+
+// === MAP DRAWING ===
+
+function drawMap(ctx) {
+  // Only draw the portion of the map actually inside the camera's view — maps
+  // can now be much bigger than one screen.
+  const vx0 = Math.max(0, camera.x), vy0 = Math.max(0, camera.y);
+  const vx1 = Math.min(MAP_W, camera.x + CW), vy1 = Math.min(MAP_H, camera.y + CH);
+
+  // Floor
+  ctx.fillStyle = '#16141e';
+  ctx.fillRect(vx0, vy0, vx1 - vx0, vy1 - vy0);
+
+  // Floor tile grid
+  ctx.strokeStyle = '#1c1a26';
+  ctx.lineWidth = 1;
+  const gyTop = Math.max(BORDER_THICKNESS, vy0), gyBot = Math.min(MAP_H - BORDER_THICKNESS, vy1);
+  for (let x = Math.max(BORDER_THICKNESS, Math.floor(vx0/TS)*TS); x < Math.min(MAP_W - BORDER_THICKNESS, vx1); x += TS) {
+    ctx.beginPath(); ctx.moveTo(x,gyTop); ctx.lineTo(x,gyBot); ctx.stroke();
+  }
+  const gxLeft = Math.max(BORDER_THICKNESS, vx0), gxRight = Math.min(MAP_W - BORDER_THICKNESS, vx1);
+  for (let y = Math.max(BORDER_THICKNESS, Math.floor(vy0/TS)*TS); y < Math.min(MAP_H - BORDER_THICKNESS, vy1); y += TS) {
+    ctx.beginPath(); ctx.moveTo(gxLeft,y); ctx.lineTo(gxRight,y); ctx.stroke();
+  }
+  // Walls / obstacles
+  for (const w of WALLS) {
+    ctx.fillStyle = '#28263a';
+    ctx.fillRect(w.x, w.y, w.w, w.h);
+    ctx.fillStyle = '#3a3858';
+    ctx.fillRect(w.x+2, w.y+2, w.w-4, w.h-4);
+    // Top-left bevel highlight
+    ctx.fillStyle = '#4a4870';
+    ctx.fillRect(w.x+2, w.y+2, w.w-4, 2);
+    ctx.fillRect(w.x+2, w.y+2, 2, w.h-4);
+  }
+}
+
+// === PLAYER ===
+
+function updatePlayer(dt) {
+  if (STATE !== 'playing' && STATE !== 'mpPlaying') return;
+  if (STATE === 'mpPlaying' && mpDowned) return; // downed players are frozen until the match ends
+
+  // Aim angle (world-space)
+  player.rawAngle = Math.atan2(mouse.worldY - player.y, mouse.worldX - player.x);
+  player.facing   = getFacingDir(player.rawAngle);
+
+  // Movement
+  let dx = 0, dy = 0;
+  if (keys.has('w') || keys.has('arrowup'))    dy -= 1;
+  if (keys.has('s') || keys.has('arrowdown'))  dy += 1;
+  if (keys.has('a') || keys.has('arrowleft'))  dx -= 1;
+  if (keys.has('d') || keys.has('arrowright')) dx += 1;
+  if (dx && dy) { dx *= 0.707; dy *= 0.707; }
+  const nx = player.x + dx * CONFIG.PLAYER.speed * dt;
+  const ny = player.y + dy * CONFIG.PLAYER.speed * dt;
+  const res = resolveWalls(nx, ny, PLAYER_SIZE);
+  player.x = res.nx; player.y = res.ny;
+
+  // Clamp inside map
+  player.x = Math.max(PLAYER_SIZE/2, Math.min(MAP_W - PLAYER_SIZE/2, player.x));
+  player.y = Math.max(PLAYER_SIZE/2, Math.min(MAP_H - PLAYER_SIZE/2, player.y));
+
+  // Camera lerp-follow player
+  const tx = player.x - CW/2, ty = player.y - CH/2;
+  camera.x += (tx - camera.x) * Math.min(1, CAMERA_LERP * dt);
+  camera.y += (ty - camera.y) * Math.min(1, CAMERA_LERP * dt);
+  camera.x = Math.max(0, Math.min(MAP_W - CW, camera.x));
+  camera.y = Math.max(0, Math.min(MAP_H - CH, camera.y));
+
+  const wantShoot = EQUIPPED_RANGED.fireMode === 'auto'
+    ? (shootQueued || mouse.leftDown)
+    : shootQueued;
+
+  // Reload — R reloads on demand; also auto-triggers once the mag runs dry
+  // (checked against wantShoot so holding the trigger on an auto weapon reloads too).
+  if (player.reloading) {
+    player.reloadTimer -= dt * 1000;
+    if (player.reloadTimer <= 0) {
+      const loaded = Math.min(EQUIPPED_RANGED.magSize - player.mag, player.reserve);
+      player.mag += loaded;
+      player.reserve -= loaded;
+      player.reloading = false;
+    }
+  }
+  const wantReload = reloadQueued || (wantShoot && player.mag <= 0);
+  reloadQueued = false;
+  if (wantReload && !player.reloading && player.mag < EQUIPPED_RANGED.magSize && player.reserve > 0) {
+    player.reloading = true;
+    player.reloadTimer = EQUIPPED_RANGED.reloadTime;
+  }
+
+  // Shoot — semi fires once per click; auto fires while held.
+  // fireCd throttles both to the weapon's cyclic rate (fireDelay), like a real firearm.
+  if (player.fireCd > 0) player.fireCd -= dt * 1000;
+  shootQueued = false;
+  if (wantShoot && !player.reloading && player.fireCd <= 0 && player.mag > 0) {
+    spawnBullet();
+    player.fireCd = EQUIPPED_RANGED.fireDelay;
+  }
+
+  // Melee
+  if (player.meleeCd > 0) player.meleeCd -= dt * 1000;
+  if (meleeQueued) {
+    meleeQueued = false;
+    if (player.meleeCd <= 0) doMelee();
+  }
+
+  // Timers
+  if (player.flashTimer > 0) player.flashTimer -= dt;
+  if (player.invincible > 0) player.invincible -= dt;
+}
+
+function drawPlayer(ctx) {
+  const anchor = HAND_ANCHORS[player.facing];
+  const handX = player.x + anchor.x;
+  const handY = player.y + anchor.y;
+  const behind = ['N','NW','NE'].includes(player.facing);
+
+  if (player.flashTimer > 0) {
+    ctx.save(); ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(player.x, player.y, PLAYER_SIZE/2+2, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.save();
+  if (STATE === 'mpPlaying' && mpDowned) ctx.globalAlpha = 0.35;
+  if (behind) _drawWeapon(ctx, handX, handY, player.rawAngle);
+  SPRITES.draw('PLAYER_' + player.facing, ctx, player.x, player.y, PLAYER_SIZE, PLAYER_SIZE, 0);
+  if (!behind) _drawWeapon(ctx, handX, handY, player.rawAngle);
+  ctx.restore();
+
+  // Melee arc indicator when on cooldown
+  if (player.meleeCd > 0) {
+    const frac = player.meleeCd / EQUIPPED_MELEE.meleeCd;
+    ctx.save();
+    ctx.globalAlpha = 0.25 * frac;
+    ctx.strokeStyle = '#f0c840';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, EQUIPPED_MELEE.meleeRange,
+            player.rawAngle - MELEE_ARC/2, player.rawAngle + MELEE_ARC/2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// Draws a weapon by name into the current 0,0-w,h transform — custom sprite
+// uploaded in devtool if present, else the default shape for that weapon
+// (or fallbackName's shape, for custom weapons with no sprite fn of their own).
+function drawWeaponIcon(ctx, name, w, h, fallbackName) {
+  const anim = SPRITES._anims[name];
+  const img  = SPRITES._images[name];
+  if (anim && anim.frames[anim.frame] && anim.frames[anim.frame].complete) {
+    ctx.drawImage(anim.frames[anim.frame], 0, 0, w, h);
+  } else if (img && img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, 0, 0, w, h);
+  } else if (SPRITE_FNS[name]) {
+    SPRITE_FNS[name](ctx, w, h);
+  } else {
+    SPRITE_FNS[fallbackName](ctx, w, h);
+  }
+}
+
+function _drawWeapon(ctx, handX, handY, rawAngle) {
+  ctx.save();
+  ctx.translate(handX, handY);
+  ctx.rotate(rawAngle);
+  ctx.translate(-GUN_W * 0.3, -GUN_H / 2);
+  drawWeaponIcon(ctx, EQUIPPED_RANGED.name, GUN_W, GUN_H, 'WEAPON_PISTOL');
+  ctx.restore();
+}
+
+// === ENEMIES ===
+
+function spawnEnemy() {
+  // Which enemies can appear is driven by the "ACTIVE" toggle in devtool.html
+  // (ENEMY_DEFS), gated further by each one's own Unlock At time and Spawn Chance.
+  // Selection is weighted the same way pickup drops are — a single roll across
+  // each eligible enemy's chance, so equal chances (the default) stay uniform.
+  const types = Object.keys(ENEMY_DEFS).filter(t => elapsed >= ENEMY_DEFS[t].unlockAt && ENEMY_DEFS[t].spawnChance > 0);
+  if (types.length === 0) return;
+  const totalChance = types.reduce((sum, t) => sum + ENEMY_DEFS[t].spawnChance, 0);
+  let roll = Math.random() * totalChance;
+  let type = types[types.length - 1];
+  for (const t of types) {
+    if (roll < ENEMY_DEFS[t].spawnChance) { type = t; break; }
+    roll -= ENEMY_DEFS[t].spawnChance;
+  }
+  const def = ENEMY_DEFS[type];
+
+  // Spawn on viewport edges around whichever player this box is anchored to —
+  // in MP that's a random connected player (not always the host's own camera),
+  // so enemies don't only ever appear near the host.
+  const anchor = STATE === 'mpPlaying' ? mpSpawnAnchor() : { x: camera.x + CW/2, y: camera.y + CH/2 };
+  const vL = anchor.x - CW/2 + 40, vR = anchor.x + CW/2 - 40;
+  const vT = anchor.y - CH/2 + 40, vB = anchor.y + CH/2 - 40;
+  let ex, ey;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const side = Math.floor(Math.random() * 4);
+    if (side === 0)      { ex = vL + Math.random()*(vR-vL); ey = vT; }
+    else if (side === 1) { ex = vL + Math.random()*(vR-vL); ey = vB; }
+    else if (side === 2) { ex = vL; ey = vT + Math.random()*(vB-vT); }
+    else                 { ex = vR; ey = vT + Math.random()*(vB-vT); }
+    if (!pointInWall(ex, ey)) break;
+  }
+
+  enemies.push({
+    id: nextEnemyId++,
+    x:ex, y:ey,
+    hp: def.hp, maxHp: def.hp,
+    type, def,
+    flashTimer: 0,
+    deathTimer: -1,
+  });
+}
+
+// Picks a random connected player (including the host itself) to spawn near.
+function mpSpawnAnchor() {
+  const alive = [{ x: player.x, y: player.y, hp: player.hp }];
+  remotePlayers.forEach(rp => { if (rp.x !== undefined) alive.push(rp); });
+  const candidates = alive.filter(p => p.hp > 0);
+  const pool = candidates.length > 0 ? candidates : alive;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function updateEnemies(dt) {
+  for (let i = enemies.length-1; i >= 0; i--) {
+    const e = enemies[i];
+    if (e.deathTimer >= 0) {
+      e.deathTimer += dt;
+      // Non-host MP clients mirror whatever the host sends rather than
+      // pruning locally — removing early would desync array/id bookkeeping
+      // from the host's authoritative view.
+      if (e.deathTimer > 0.4 && (STATE !== 'mpPlaying' || isHost)) enemies.splice(i, 1);
+      continue;
+    }
+
+    if (STATE !== 'mpPlaying' || isHost) {
+      // Movement/AI is authoritative here — host during MP, always in single-player.
+      // Chase whichever connected player is nearest, not just this client's own.
+      const target = STATE === 'mpPlaying' ? nearestPlayerTo(e.x, e.y) : player;
+      const dx = target.x - e.x;
+      const dy = target.y - e.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist > 2) {
+        const nx = e.x + (dx/dist) * e.def.speed * dt;
+        const ny = e.y + (dy/dist) * e.def.speed * dt;
+        const res = resolveWalls(nx, ny, e.def.size);
+        e.x = res.nx; e.y = res.ny;
+      }
+    }
+
+    // Contact damage — every client checks its own local player against
+    // whatever enemy positions it currently has (the host's live sim, or a
+    // client's last-received network snapshot).
+    const pdist = Math.hypot(player.x - e.x, player.y - e.y);
+    if (STATE !== 'mpPlaying' || !mpDowned) {
+      if (player.invincible <= 0 && pdist < (PLAYER_SIZE + e.def.size) / 2 + 2) {
+        player.hp -= e.def.dmg;
+        player.flashTimer = 0.15;
+        player.invincible = 0.5;
+        if (player.hp <= 0) {
+          player.hp = 0;
+          if (STATE === 'mpPlaying') goDowned(); else endGame();
+        }
+      }
+    }
+
+    if (e.flashTimer > 0) e.flashTimer -= dt;
+  }
+}
+
+function drawEnemies(ctx) {
+  for (const e of enemies) {
+    if (e.deathTimer >= 0) {
+      // Death dissolve
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - e.deathTimer * 2.5);
+      const scale = 1 + e.deathTimer * 2;
+      ctx.translate(e.x, e.y); ctx.scale(scale, scale); ctx.translate(-e.x, -e.y);
+      ctx.fillStyle = e.def.color;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.def.size/2, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+      continue;
+    }
+
+    if (e.flashTimer > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.def.size/2+2, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+
+    const angle = Math.atan2(player.y - e.y, player.x - e.x) + Math.PI/2;
+    SPRITES.draw(e.type, ctx, e.x, e.y, e.def.size, e.def.size, angle, 'ENEMY_BASIC');
+
+    // HP bar
+    if (e.hp < e.maxHp) {
+      const bw = e.def.size + 8;
+      ctx.fillStyle = '#2a0808';
+      ctx.fillRect(e.x - bw/2, e.y - e.def.size/2 - 6, bw, 3);
+      const pct = e.hp / e.maxHp;
+      ctx.fillStyle = pct > 0.5 ? '#5aaa3a' : pct > 0.25 ? '#c8a840' : '#c84040';
+      ctx.fillRect(e.x - bw/2, e.y - e.def.size/2 - 6, Math.round(bw * pct), 3);
+    }
+  }
+}
+
+// `killerId` is only meaningful during MP (who dealt the killing blow, for
+// score attribution) — null/ignored in single-player, which keeps its own
+// score/combo globals exactly as before.
+function killEnemy(e, isMelee, killerId) {
+  e.deathTimer = 0;
+  const mp = STATE === 'mpPlaying';
+
+  let mult;
+  if (mp) {
+    // Each player keeps an independent combo streak even though the enemy
+    // pool itself is shared — host is authoritative for all of them.
+    const ps = playerScores[killerId] || (playerScores[killerId] = { name: '', score: 0, combo: 0, comboTimer: 0 });
+    ps.combo++;
+    ps.comboTimer = COMBO_TIMEOUT;
+    mult = ps.combo;
+    ps.score += e.def.score * mult;
+  } else {
+    combo++;
+    if (combo > peakCombo) peakCombo = combo;
+    comboTimer = COMBO_TIMEOUT;
+    mult = combo;
+    score += e.def.score * mult;
+
+    const milestones = {5:'GOOD!', 10:'GREAT!!', 20:'EXCELLENT!!!', 30:'★ LEGENDARY ★'};
+    if (milestones[combo]) {
+      comboMilestone = milestones[combo];
+      comboMilestoneTimer = 2000;
+    }
+  }
+
+  // Time bonus — still a shared/host-authoritative timer during MP.
+  if (isMelee) {
+    mainTimer = Math.min(mainTimer + MELEE_TIME_BONUS, 150);
+    spawnFlash('+' + MELEE_TIME_BONUS + 's', e.x, e.y - 10, '#3ef83e');
+  }
+
+  // Pickup drops driven by CONFIG
+  const roll = Math.random() * 100;
+  const ph = CONFIG.PICKUP_HEALTH, pa = CONFIG.PICKUP_AMMO, pw = CONFIG.PICKUP_WEAPON;
+  if (roll < ph.dropChance) {
+    pickups.push({ id: nextPickupId++, kind:'health', x: e.x, y: e.y, amount: ph.healMin + Math.floor(Math.random()*(ph.healMax - ph.healMin + 1)), timer:0 });
+  } else if (roll < ph.dropChance + pa.dropChance) {
+    pickups.push({ id: nextPickupId++, kind:'ammo',   x: e.x, y: e.y, amount: pa.amountMin + Math.floor(Math.random()*(pa.amountMax - pa.amountMin + 1)), timer:0 });
+  } else if (roll < ph.dropChance + pa.dropChance + pw.dropChance) {
+    const pool = lootPoolEntries();
+    if (pool.length > 0) {
+      const drop = pool[Math.floor(Math.random() * pool.length)];
+      pickups.push({ id: nextPickupId++, kind:'weapon', x: e.x, y: e.y, timer:0, weaponName: drop.name, category: drop.category });
+    }
+  }
+
+  // Spawn particles
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 40 + Math.random() * 80;
+    particles.push({
+      x: e.x, y: e.y,
+      dx: Math.cos(a)*spd, dy: Math.sin(a)*spd,
+      color: e.def.color,
+      life: 0.3 + Math.random()*0.3,
+      maxLife: 0.6,
+      size: 2 + Math.random()*3,
+    });
+  }
+
+  spawnFlash('x' + mult + '  +' + (e.def.score * mult), e.x, e.y - 24, '#f0c840');
+}
+
+// Applies damage to an enemy and resolves a kill. In single-player this is
+// the same authoritative path it's always been. During MP, only the host
+// ever calls this for real — see the bullet/melee hit-detection loops below,
+// which optimistically show local feedback but route the actual damage
+// through a `hit` network message when not the host.
+function applyDamageToEnemy(e, dmg, isMelee, killerId) {
+  e.hp -= dmg;
+  e.flashTimer = isMelee ? 0.1 : 0.06;
+  if (e.hp <= 0) killEnemy(e, isMelee, killerId);
+}
+
+// === PROJECTILES ===
+
+function spawnBullet() {
+  if (player.mag <= 0) return;
+  player.mag--; // one trigger pull consumes one round, regardless of pellet count
+  const aimAngle = player.rawAngle;
+  const anchor = HAND_ANCHORS[player.facing];
+  const originX = player.x + anchor.x + Math.cos(aimAngle) * GUN_LENGTH;
+  const originY = player.y + anchor.y + Math.sin(aimAngle) * GUN_LENGTH;
+  const spreadRad = EQUIPPED_RANGED.spreadAngle * Math.PI / 180;
+
+  for (let i = 0; i < EQUIPPED_RANGED.pelletCount; i++) {
+    const angle = spreadRad > 0 ? aimAngle + (Math.random() - 0.5) * spreadRad : aimAngle;
+    bullets.push({
+      x: originX, y: originY,
+      dx: Math.cos(angle) * EQUIPPED_RANGED.bulletSpeed,
+      dy: Math.sin(angle) * EQUIPPED_RANGED.bulletSpeed,
+      distTravelled: 0,
+    });
+  }
+}
+
+function updateBullets(dt) {
+  for (let i = bullets.length-1; i >= 0; i--) {
+    const b = bullets[i];
+    b.x += b.dx * dt;
+    b.y += b.dy * dt;
+    b.distTravelled += Math.sqrt(b.dx*b.dx + b.dy*b.dy) * dt;
+
+    if (b.distTravelled > EQUIPPED_RANGED.bulletRange || pointInWall(b.x, b.y) ||
+        b.x < 0 || b.x > MAP_W || b.y < 0 || b.y > MAP_H) {
+      bullets.splice(i, 1);
+      continue;
+    }
+
+    let hit = false;
+    for (const e of enemies) {
+      if (e.deathTimer >= 0) continue;
+      const dist = Math.hypot(b.x - e.x, b.y - e.y);
+      if (dist < e.def.size/2 + 3) {
+        if (STATE === 'mpPlaying' && !isHost) {
+          // Optimistic local feedback only — the host resolves the real hp/kill.
+          e.flashTimer = 0.06;
+          Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+        } else {
+          applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+        }
+        hit = true;
+        break;
+      }
+    }
+    if (hit) bullets.splice(i, 1);
+  }
+}
+
+function drawBullets(ctx) {
+  ctx.fillStyle = '#f0e040';
+  ctx.shadowColor = '#f0e040';
+  ctx.shadowBlur = 6;
+  for (const b of bullets) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, 3, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+}
+
+// === MELEE ===
+
+function doMelee() {
+  player.meleeCd = EQUIPPED_MELEE.meleeCd;
+  player.flashTimer = 0.08;
+  const aimAngle = player.rawAngle;
+  for (const e of enemies) {
+    if (e.deathTimer >= 0) continue;
+    const dist = Math.hypot(e.x - player.x, e.y - player.y);
+    if (dist > EQUIPPED_MELEE.meleeRange) continue;
+    const toEnemy = Math.atan2(e.y - player.y, e.x - player.x);
+    let diff = toEnemy - aimAngle;
+    while (diff >  Math.PI) diff -= Math.PI*2;
+    while (diff < -Math.PI) diff += Math.PI*2;
+    if (Math.abs(diff) < MELEE_ARC/2) {
+      if (STATE === 'mpPlaying' && !isHost) {
+        e.flashTimer = 0.1;
+        Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_MELEE.meleeDmg, isMelee: true });
+      } else {
+        applyDamageToEnemy(e, EQUIPPED_MELEE.meleeDmg, true, Net.playerId);
+      }
+    }
+  }
+  // Melee arc visual
+  const aimA = aimAngle;
+  for (let i = 0; i < 6; i++) {
+    const a = aimA - MELEE_ARC/2 + (i/5)*MELEE_ARC;
+    particles.push({
+      x: player.x + Math.cos(a)*EQUIPPED_MELEE.meleeRange*0.5,
+      y: player.y + Math.sin(a)*EQUIPPED_MELEE.meleeRange*0.5,
+      dx: Math.cos(a)*30, dy: Math.sin(a)*30,
+      color: '#f0c840', life:0.15, maxLife:0.15, size:4,
+    });
+  }
+}
+
+// === PICKUPS ===
+
+function updatePickups(dt) {
+  for (let i = pickups.length-1; i >= 0; i--) {
+    const p = pickups[i];
+    p.timer += dt;
+    if (p.timer > 8) { pickups.splice(i, 1); continue; }
+    const dist = Math.hypot(player.x - p.x, player.y - p.y);
+    if (dist < 18) {
+      if (p.kind === 'health') {
+        player.hp = Math.min(player.hp + p.amount, player.maxHp);
+        spawnFlash('+' + p.amount + ' HP', p.x, p.y - 10, '#f04060');
+      } else if (p.kind === 'ammo') {
+        player.reserve = Math.min(player.reserve + p.amount, RESERVE_AMMO_CAP);
+        spawnFlash('+' + p.amount + ' AMMO', p.x, p.y - 10, '#c8e840');
+      } else if (p.kind === 'weapon') {
+        if (p.category === 'ranged') {
+          Object.assign(EQUIPPED_RANGED, resolveEquippedWeapon('ranged', p.weaponName));
+          player.mag = Math.min(EQUIPPED_RANGED.magSize, EQUIPPED_RANGED.ammo);
+          player.reserve = EQUIPPED_RANGED.ammo - player.mag;
+          player.reloading = false; player.reloadTimer = 0; player.fireCd = 0;
+        } else {
+          Object.assign(EQUIPPED_MELEE, resolveEquippedWeapon('melee', p.weaponName));
+          player.meleeCd = 0;
+        }
+        spawnFlash('EQUIPPED ' + p.weaponName.replace('WEAPON_','').replace(/_/g,' '), p.x, p.y - 10, '#3ef83e');
+      }
+      pickups.splice(i, 1);
+      // Tell the host this pickup is gone so another player's client (which
+      // may not notice for up to ~100ms) doesn't also grant it. No-op if
+      // we ARE the host — the server doesn't route a host's own messages back.
+      if (STATE === 'mpPlaying') Net.send('claim', { pickupId: p.id });
+    }
+  }
+}
+
+function drawPickups(ctx) {
+  for (const p of pickups) {
+    const bob = Math.sin(p.timer * 5) * 2;
+    const alpha = p.timer > 6 ? 1 - (p.timer-6)/2 : 1;
+    ctx.globalAlpha = alpha;
+    if (p.kind === 'health') {
+      SPRITES.draw('PICKUP_HEALTH', ctx, p.x, p.y + bob, 16, 16, 0);
+    } else if (p.kind === 'ammo') {
+      SPRITES.draw('PICKUP_AMMO', ctx, p.x, p.y + bob, 18, 12, 0);
+    } else if (p.kind === 'weapon') {
+      const fallback = p.category === 'ranged' ? 'WEAPON_PISTOL' : 'WEAPON_KNIFE';
+      const w = 22, h = 11;
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.35;
+      ctx.fillStyle = '#3ef83e';
+      ctx.beginPath(); ctx.arc(p.x, p.y + bob, 14, 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = alpha;
+      ctx.translate(p.x - w/2, p.y + bob - h/2);
+      drawWeaponIcon(ctx, p.weaponName, w, h, fallback);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+// === PARTICLES ===
+
+function updateParticles(dt) {
+  for (let i = particles.length-1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.dx * dt; p.y += p.dy * dt;
+    p.dx *= 0.92; p.dy *= 0.92;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles(ctx) {
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// === FLASHES ===
+
+function spawnFlash(text, x, y, color) {
+  flashes.push({ text, x, y: y, vy: -28, color, timer:0, maxTimer:1000 });
+}
+
+function updateFlashes(dt) {
+  for (let i = flashes.length-1; i >= 0; i--) {
+    const f = flashes[i];
+    f.timer += dt * 1000;
+    f.y += f.vy * dt;
+    if (f.timer > f.maxTimer) flashes.splice(i, 1);
+  }
+}
+
+function drawFlashes(ctx) {
+  ctx.textAlign = 'center';
+  for (const f of flashes) {
+    const alpha = f.timer < 200 ? f.timer/200 : Math.max(0, 1 - (f.timer-600)/400);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = f.color;
+    ctx.font = 'bold 18px VT323, monospace';
+    ctx.fillText(f.text, f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+}
+
+// === HUD ===
+
+function drawHUD(ctx) {
+  // Semi-transparent panel areas
+  const panelAlpha = 0.72;
+
+  // Top center: timer
+  ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
+  ctx.fillRect(CW/2-70, 8, 140, 46);
+  ctx.strokeStyle = mainTimer < 30 ? '#c84040' : '#3a384e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(CW/2-70, 8, 140, 46);
+  const timerStr = mainTimer < 10 ? '0' + mainTimer.toFixed(1) : mainTimer.toFixed(1);
+  ctx.fillStyle = mainTimer < 30 ? '#ff4040' : '#f0f0f0';
+  ctx.font = `${mainTimer < 10 ? '38' : '34'}px VT323, monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(timerStr, CW/2, 46);
+  ctx.font = '11px VT323, monospace';
+  ctx.fillStyle = '#5a5870';
+  ctx.fillText('TIMER', CW/2, 14);
+  ctx.textAlign = 'left';
+
+  // Top left: HP + ammo
+  ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
+  ctx.fillRect(8, 8, 160, 60);
+  ctx.strokeStyle = '#3a384e'; ctx.lineWidth=1;
+  ctx.strokeRect(8, 8, 160, 60);
+  // HP bar
+  ctx.fillStyle = '#2a1a1a';
+  ctx.fillRect(14, 18, 148, 10);
+  const hpPct = player.hp / player.maxHp;
+  ctx.fillStyle = hpPct > 0.5 ? '#3ec83e' : hpPct > 0.25 ? '#c8a840' : '#c84040';
+  ctx.fillRect(14, 18, Math.round(148 * hpPct), 10);
+  ctx.strokeStyle='#3a384e'; ctx.strokeRect(14,18,148,10);
+  ctx.fillStyle = '#8a88a0'; ctx.font='12px VT323, monospace';
+  ctx.fillText('HP  ' + player.hp + ' / ' + player.maxHp, 14, 44);
+  // Ammo / Reload
+  if (player.reloading) {
+    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 150);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#f0a840'; ctx.font='13px VT323, monospace';
+    ctx.fillText('RELOADING...', 14, 60);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = '#f0c840'; ctx.font='13px VT323, monospace';
+    ctx.fillText('AMMO  ' + player.mag + ' / ' + player.reserve, 14, 60);
+  }
+
+  // Top right: score + combo
+  ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
+  ctx.fillRect(CW-168, 8, 160, 60);
+  ctx.strokeStyle = '#3a384e'; ctx.strokeRect(CW-168, 8, 160, 60);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#c8a840'; ctx.font='22px VT323, monospace';
+  ctx.fillText(score.toString().padStart(8,'0'), CW-12, 32);
+  ctx.fillStyle = '#8a88a0'; ctx.font='11px VT323, monospace';
+  ctx.fillText('SCORE', CW-12, 14);
+  // Combo
+  const comboColor = combo >= 20 ? '#ff8040' : combo >= 10 ? '#f0c840' : combo >= 5 ? '#c8e840' : '#3ef83e';
+  ctx.fillStyle = comboColor; ctx.font='18px VT323, monospace';
+  ctx.fillText('x' + (combo || 1) + '  COMBO', CW-12, 50);
+  // Combo timer bar
+  if (combo > 0) {
+    const cbPct = comboTimer / COMBO_TIMEOUT;
+    ctx.fillStyle = '#1a1a2a';
+    ctx.fillRect(CW-168, 62, 160, 5);
+    ctx.fillStyle = comboColor;
+    ctx.fillRect(CW-168, 62, Math.round(160 * cbPct), 5);
+  }
+  ctx.textAlign = 'left';
+
+  // Combo milestone flash (center bottom)
+  if (comboMilestoneTimer > 0 && comboMilestone) {
+    const alpha = comboMilestoneTimer > 1500 ? 1 : comboMilestoneTimer / 1500;
+    const scale = comboMilestoneTimer > 1700 ? 1 + (2000-comboMilestoneTimer)/300*0.3 : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(CW/2, CH-30);
+    ctx.scale(scale, scale);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f0c840';
+    ctx.font = '36px VT323, monospace';
+    ctx.fillText(comboMilestone, 0, 0);
+    ctx.restore();
+    ctx.textAlign = 'left';
+  }
+
+  // High score hint
+  if (highScore > 0) {
+    ctx.fillStyle = '#2a2840';
+    ctx.font = '12px VT323, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('BEST  ' + highScore.toString().padStart(8,'0'), CW/2, CH-8);
+    ctx.textAlign = 'left';
+  }
+}
+
+// Multiplayer HUD — same timer/HP/ammo panels as the single-player HUD, but
+// the top-right panel is a live scoreboard instead of one player's score/combo.
+function drawMpHUD(ctx) {
+  const panelAlpha = 0.72;
+
+  // Top center: timer (host-authoritative, broadcast to everyone)
+  ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
+  ctx.fillRect(CW/2-70, 8, 140, 46);
+  ctx.strokeStyle = mainTimer < 30 ? '#c84040' : '#3a384e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(CW/2-70, 8, 140, 46);
+  const timerStr = mainTimer < 10 ? '0' + mainTimer.toFixed(1) : mainTimer.toFixed(1);
+  ctx.fillStyle = mainTimer < 30 ? '#ff4040' : '#f0f0f0';
+  ctx.font = `${mainTimer < 10 ? '38' : '34'}px VT323, monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(timerStr, CW/2, 46);
+  ctx.font = '11px VT323, monospace';
+  ctx.fillStyle = '#5a5870';
+  ctx.fillText('TIMER', CW/2, 14);
+  ctx.textAlign = 'left';
+
+  // Top left: HP + ammo (this client's own player)
+  ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
+  ctx.fillRect(8, 8, 160, 60);
+  ctx.strokeStyle = '#3a384e'; ctx.lineWidth=1;
+  ctx.strokeRect(8, 8, 160, 60);
+  ctx.fillStyle = '#2a1a1a';
+  ctx.fillRect(14, 18, 148, 10);
+  const hpPct = Math.max(0, player.hp / player.maxHp);
+  ctx.fillStyle = hpPct > 0.5 ? '#3ec83e' : hpPct > 0.25 ? '#c8a840' : '#c84040';
+  ctx.fillRect(14, 18, Math.round(148 * hpPct), 10);
+  ctx.strokeStyle='#3a384e'; ctx.strokeRect(14,18,148,10);
+  ctx.fillStyle = '#8a88a0'; ctx.font='12px VT323, monospace';
+  ctx.fillText('HP  ' + player.hp + ' / ' + player.maxHp, 14, 44);
+  if (player.reloading) {
+    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 150);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#f0a840'; ctx.font='13px VT323, monospace';
+    ctx.fillText('RELOADING...', 14, 60);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = '#f0c840'; ctx.font='13px VT323, monospace';
+    ctx.fillText('AMMO  ' + player.mag + ' / ' + player.reserve, 14, 60);
+  }
+
+  // Top right: live scoreboard (host-authoritative, broadcast to everyone)
+  const entries = Object.entries(playerScores).sort((a, b) => b[1].score - a[1].score).slice(0, 4);
+  const boardH = 20 + entries.length * 18;
+  ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
+  ctx.fillRect(CW-180, 8, 172, boardH);
+  ctx.strokeStyle = '#3a384e'; ctx.strokeRect(CW-180, 8, 172, boardH);
+  ctx.fillStyle = '#8a88a0'; ctx.font = '11px VT323, monospace';
+  ctx.fillText('SCOREBOARD', CW-174, 20);
+  entries.forEach(([id, ps], i) => {
+    const y = 36 + i*18;
+    ctx.fillStyle = id === Net.playerId ? '#3ef83e' : '#c8c6e0';
+    ctx.font = '13px VT323, monospace';
+    ctx.fillText((ps.name || '?').slice(0, 10), CW-174, y);
+    ctx.textAlign = 'right';
+    ctx.fillText(String(ps.score), CW-14, y);
+    ctx.textAlign = 'left';
+  });
+
+  if (mpDowned) {
+    const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 300);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#c84040';
+    ctx.font = '28px VT323, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('DOWNED — SPECTATING', CW/2, CH - 40);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+  }
+}
+
+function drawMpEndedScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.92)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '44px VT323, monospace';
+  ctx.fillText('MATCH OVER', CW/2, 80);
+
+  const entries = Object.entries(mpFinalScores).sort((a, b) => b[1].score - a[1].score);
+  let y = 140;
+  if (entries.length === 0) {
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '16px VT323, monospace';
+    ctx.fillText('No scores recorded.', CW/2, y);
+    y += 30;
+  } else {
+    entries.forEach(([id, ps], i) => {
+      ctx.fillStyle = i === 0 ? '#f0e040' : (id === Net.playerId ? '#3ef83e' : '#c8c6e0');
+      ctx.font = '22px VT323, monospace';
+      ctx.fillText((i+1) + '. ' + (ps.name || '?') + '   ' + ps.score, CW/2, y);
+      y += 32;
+    });
+  }
+
+  const bw = 220, bh = 46, bx = CW/2 - bw/2, by = y + 30;
+  uiButton(ctx, bx, by, bw, bh, '[ BACK TO LOBBIES ]', () => { STATE = 'mpBrowse'; Net.send('list'); });
+  ctx.textAlign = 'left';
+}
+
+// === MULTIPLAYER (WebSocket lobby client) ===
+//
+// Thin client to match the server: the socket just relays lobby membership
+// and, once in a match, per-message game state — see server.js for the
+// authoritative protocol. `Net.playerId` is this client's id once connected.
+
+const Net = {
+  ws: null,
+  playerId: null,
+  handlers: {},
+  connect(onOpen, onError) {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(proto + '//' + location.host);
+    this.ws = socket;
+    socket.onopen  = () => { if (this.ws === socket) onOpen && onOpen(); };
+    socket.onerror = () => { if (this.ws === socket) onError && onError(); };
+    socket.onclose = () => {
+      if (this.ws !== socket) return;
+      this.playerId = null;
+      if (this.onClose) this.onClose();
+    };
+    socket.onmessage = (e) => {
+      if (this.ws !== socket) return;
+      let msg;
+      try { msg = JSON.parse(e.data); } catch(err) { return; }
+      if (msg.type === 'welcome') this.playerId = msg.id;
+      const h = this.handlers[msg.type];
+      if (h) h(msg);
+    };
+  },
+  send(type, data) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify(Object.assign({ type }, data || {})));
+  },
+  on(type, fn) { this.handlers[type] = fn; },
+  close() { if (this.ws) { this.ws.close(); this.ws = null; } this.playerId = null; },
+};
+
+function mpPlayerName() { return localStorage.getItem('mercs_player_name') || 'Player'; }
+
+// Canvas-drawn free-text entry — generalizes the arcade-initials cycling
+// screen's "capture keyboard, no real <input>" pattern into arbitrary text
+// (name entry, lobby naming), rather than the 3-letter cycling behavior itself.
+const TextEntry = {
+  active: false,
+  value: '',
+  maxLen: 20,
+  onConfirm: null,
+  onCancel: null,
+  start(initial, maxLen, onConfirm, onCancel) {
+    this.active = true;
+    this.value = initial || '';
+    this.maxLen = maxLen || 20;
+    this.onConfirm = onConfirm;
+    this.onCancel = onCancel;
+  },
+  handleKey(e) {
+    if (!this.active) return;
+    if (e.key === 'Enter') {
+      this.active = false;
+      e.preventDefault();
+      const v = this.value;
+      if (this.onConfirm) this.onConfirm(v);
+    } else if (e.key === 'Escape') {
+      this.active = false;
+      e.preventDefault();
+      if (this.onCancel) this.onCancel();
+    } else if (e.key === 'Backspace') {
+      this.value = this.value.slice(0, -1);
+      e.preventDefault();
+    } else if (e.key.length === 1 && this.value.length < this.maxLen && /[a-zA-Z0-9 _'-]/.test(e.key)) {
+      this.value += e.key;
+      e.preventDefault();
+    }
+  },
+};
+
+let mpConnectError = '';
+let mpLobbies = [];
+let mpCurrentLobby = null;
+let mpErrorMsg = '';
+let mpErrorUntil = 0;
+
+// Gameplay-sync state — see server.js for the authoritative protocol this
+// mirrors. `isHost` decides who simulates enemies/pickups/timer for real;
+// everyone else just renders the host's broadcasts.
+let isHost = false;
+let remotePlayers = new Map(); // id -> { name, x, y, targetX, targetY, facing, hp, maxHp, weaponName }
+let playerScores = {};         // id -> { name, score, combo, comboTimer } — host-authoritative
+let mpFinalScores = {};
+let mpDowned = false;          // this client's own player hit 0 HP but the match continues
+let nextEnemyId = 1;
+let nextPickupId = 1;
+let netBroadcastTimer = 0;
+
+Net.on('welcome', () => { STATE = 'mpBrowse'; Net.send('list'); });
+Net.on('lobbies', msg => { mpLobbies = msg.list || []; });
+Net.on('lobby', msg => {
+  mpCurrentLobby = msg.lobby;
+  if (STATE === 'mpBrowse') STATE = 'mpLobby';
+});
+Net.on('error', msg => { mpErrorMsg = msg.message || 'Error'; mpErrorUntil = Date.now() + 3000; });
+Net.on('started', msg => { startMultiplayerMatch(msg); });
+Net.on('ended', msg => { STATE = 'mpEnded'; mpFinalScores = msg.scores || {}; });
+
+Net.on('state', msg => {
+  if (msg.kind === 'player') {
+    let rp = remotePlayers.get(msg.from);
+    if (!rp) { rp = { name: '', x: msg.data.x, y: msg.data.y }; remotePlayers.set(msg.from, rp); }
+    rp.targetX = msg.data.x; rp.targetY = msg.data.y;
+    rp.facing = msg.data.facing; rp.hp = msg.data.hp; rp.maxHp = msg.data.maxHp;
+    rp.weaponName = msg.data.weaponName;
+    if (rp.x === undefined) { rp.x = msg.data.x; rp.y = msg.data.y; }
+  } else if (msg.kind === 'enemies' && !isHost) {
+    enemies = msg.data.map(d => Object.assign({}, d, { def: ENEMY_DEFS[d.type] || ENEMY_DEFS.ENEMY_BASIC }));
+  } else if (msg.kind === 'pickups' && !isHost) {
+    pickups = msg.data.map(d => Object.assign({}, d));
+  } else if (msg.kind === 'timer' && !isHost) {
+    mainTimer = msg.data.mainTimer; elapsed = msg.data.elapsed;
+  } else if (msg.kind === 'scores') {
+    playerScores = msg.data;
+  }
+});
+
+// Only the host ever receives these (server routes them there directly) —
+// resolves damage/pickup claims authoritatively, see applyDamageToEnemy().
+Net.on('hit', msg => {
+  if (!isHost) return;
+  const e = enemies.find(en => en.id === msg.enemyId && en.deathTimer < 0);
+  if (e) applyDamageToEnemy(e, msg.dmg, !!msg.isMelee, msg.from);
+});
+Net.on('claim', msg => {
+  if (!isHost) return;
+  const idx = pickups.findIndex(p => p.id === msg.pickupId);
+  if (idx !== -1) pickups.splice(idx, 1);
+});
+
+Net.onClose = () => {
+  if (STATE === 'mpBrowse' || STATE === 'mpLobby' || STATE === 'mpName' || STATE === 'mpConnect' || STATE === 'mpPlaying') {
+    mpConnectError = 'Disconnected from multiplayer server.';
+    STATE = 'mpConnect';
+  }
+};
+
+function enterMultiplayer() {
+  STATE = 'mpConnect';
+  mpConnectError = '';
+  if (Net.ws && Net.ws.readyState === WebSocket.OPEN && Net.playerId) {
+    STATE = 'mpBrowse';
+    Net.send('list');
+    return;
+  }
+  Net.connect(() => {
+    const savedName = localStorage.getItem('mercs_player_name');
+    if (savedName) {
+      Net.send('hello', { name: savedName });
+    } else {
+      TextEntry.start('', 16, name => {
+        const finalName = (name || '').trim() || 'Player';
+        localStorage.setItem('mercs_player_name', finalName);
+        Net.send('hello', { name: finalName });
+      }, () => { STATE = 'start'; Net.close(); });
+      STATE = 'mpName';
+    }
+  }, () => { mpConnectError = 'Could not connect to the multiplayer server.'; });
+}
+
+function startMultiplayerMatch(msg) {
+  STATE = 'mpPlaying';
+  isHost = Net.playerId === msg.hostId;
+  nextEnemyId = 1; nextPickupId = 1;
+  netBroadcastTimer = 0;
+  mpDowned = false;
+
+  remotePlayers = new Map();
+  playerScores = {};
+  msg.players.forEach(p => {
+    playerScores[p.id] = { name: p.name, score: 0, combo: 0, comboTimer: 0 };
+    if (p.id !== Net.playerId) {
+      remotePlayers.set(p.id, { name: p.name, x: undefined, y: undefined, facing: 'S', hp: 100, maxHp: 100, weaponName: 'WEAPON_PISTOL' });
+    }
+  });
+
+  resetPlayerForMatch();
+}
+
+// Finds the nearest connected player to a point — used by host-simulated
+// enemy movement so enemies chase whoever's closest, not just the host.
+function nearestPlayerTo(x, y) {
+  let best = { x: player.x, y: player.y, dist: Math.hypot(player.x - x, player.y - y) };
+  if (player.hp <= 0) best.dist = Infinity;
+  remotePlayers.forEach(rp => {
+    if (rp.hp <= 0 || rp.x === undefined) return;
+    const d = Math.hypot(rp.x - x, rp.y - y);
+    if (d < best.dist) best = { x: rp.x, y: rp.y, dist: d };
+  });
+  return best;
+}
+
+// This client's own player HP hit 0 mid-match — freeze locally and keep
+// receiving network updates. The match itself only ends when the host says so.
+function goDowned() {
+  mpDowned = true;
+}
+
+// Host-only: tells the server (and thus every client, itself included, via
+// the 'ended' broadcast) that the match is over.
+function endMultiplayerMatch() {
+  if (!isHost) return;
+  Net.send('end', { scores: playerScores });
+}
+
+function updateRemotePlayers(dt) {
+  const lerpRate = Math.min(1, 12 * dt);
+  remotePlayers.forEach(rp => {
+    if (rp.targetX === undefined) return;
+    rp.x += (rp.targetX - rp.x) * lerpRate;
+    rp.y += (rp.targetY - rp.y) * lerpRate;
+  });
+}
+
+function drawRemotePlayers(ctx) {
+  remotePlayers.forEach(rp => {
+    if (rp.x === undefined || rp.hp <= 0) return;
+    SPRITES.draw('PLAYER_' + (rp.facing || 'S'), ctx, rp.x, rp.y, PLAYER_SIZE, PLAYER_SIZE, 0);
+    ctx.fillStyle = '#8a88a0';
+    ctx.font = '11px VT323, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(rp.name || '', rp.x, rp.y - PLAYER_SIZE/2 - 6);
+    ctx.textAlign = 'left';
+  });
+}
+
+// Broadcasts this client's own state ~10/sec, plus the host's authoritative
+// shared state (enemies/pickups/timer/scores) at the same rate.
+function updateMultiplayerNet(dt) {
+  netBroadcastTimer += dt;
+  if (netBroadcastTimer < 0.1) return;
+  netBroadcastTimer = 0;
+
+  Net.send('state', { kind: 'player', data: {
+    x: player.x, y: player.y, facing: player.facing,
+    hp: mpDowned ? 0 : player.hp, maxHp: player.maxHp,
+    weaponName: EQUIPPED_RANGED.name,
+  }});
+
+  if (isHost) {
+    Net.send('state', { kind: 'enemies', data: enemies.map(e => ({
+      id: e.id, x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp, type: e.type,
+      flashTimer: e.flashTimer, deathTimer: e.deathTimer,
+    })) });
+    Net.send('state', { kind: 'pickups', data: pickups.map(p => ({
+      id: p.id, kind: p.kind, x: p.x, y: p.y, timer: p.timer,
+      amount: p.amount, weaponName: p.weaponName, category: p.category,
+    })) });
+    Net.send('state', { kind: 'timer', data: { mainTimer, elapsed } });
+    Net.send('state', { kind: 'scores', data: playerScores });
+
+    const allDowned = mpDowned && Array.from(remotePlayers.values()).every(rp => rp.hp <= 0);
+    if (allDowned) endMultiplayerMatch();
+  }
+}
+
+// === UI BUTTONS (canvas-drawn, hit-tested against click coords) ===
+//
+// Repopulated every frame by whichever screen is currently drawn; see the
+// canvas 'click' handler below for the hit-test.
+
+let uiButtons = [];
+
+function uiButton(ctx, x, y, w, h, label, action, opts) {
+  opts = opts || {};
+  const disabled = !!opts.disabled;
+  ctx.fillStyle = disabled ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.06)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = disabled ? '#3a384e' : '#3ef83e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.fillStyle = disabled ? '#5a5870' : '#3ef83e';
+  ctx.font = opts.font || '20px VT323, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x + w/2, y + h/2 + 7);
+  ctx.textAlign = 'left';
+  if (!disabled) uiButtons.push({ x, y, w, h, action });
+}
+
+// === SCREENS ===
+
+function drawStartScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.88)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '72px VT323, monospace';
+  ctx.fillText('MERCS', CW/2, CH/2 - 150);
+
+  ctx.fillStyle = '#5a5870';
+  ctx.font = '20px VT323, monospace';
+  ctx.fillText('TERMINAL MERCENARIES', CW/2, CH/2 - 114);
+
+  if (highScore > 0) {
+    ctx.fillStyle = '#c8a840';
+    ctx.font = '20px VT323, monospace';
+    ctx.fillText('HIGH SCORE:  ' + highScore, CW/2, CH/2 - 78);
+  }
+
+  const bw = 240, bh = 46, bx = CW/2 - bw/2, gap = 14;
+  let by = CH/2 - 40;
+  uiButton(ctx, bx, by, bw, bh, '[ START ]', () => startGame());
+  by += bh + gap;
+  uiButton(ctx, bx, by, bw, bh, '[ MULTIPLAYER ]', () => enterMultiplayer());
+  by += bh + gap;
+  uiButton(ctx, bx, by, bw, bh, '[ SETTINGS ]', () => { STATE = 'settings'; });
+
+  ctx.fillStyle = '#5a5870';
+  ctx.font = '13px VT323, monospace';
+  ctx.fillText('ENTER — QUICK START     L — LEADERBOARD', CW/2, by + bh + 28);
+
+  ctx.fillStyle = '#8a88a0';
+  ctx.font = '13px VT323, monospace';
+  ctx.fillText('WASD / ARROWS — move    MOUSE — aim', CW/2, by + bh + 52);
+  ctx.fillText('LEFT CLICK / SPACE — shoot    RIGHT CLICK / F — melee    R — reload', CW/2, by + bh + 72);
+  ctx.textAlign = 'left';
+}
+
+function drawSettingsScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.90)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '48px VT323, monospace';
+  ctx.fillText('SETTINGS', CW/2, CH/2 - 80);
+
+  ctx.fillStyle = '#8a88a0';
+  ctx.font = '18px VT323, monospace';
+  ctx.fillText('More options are coming soon.', CW/2, CH/2 - 20);
+
+  const bw = 180, bh = 44, bx = CW/2 - bw/2, by = CH/2 + 20;
+  uiButton(ctx, bx, by, bw, bh, '[ BACK ]', () => { STATE = 'start'; });
+  ctx.textAlign = 'left';
+}
+
+function drawMpConnectScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.90)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = mpConnectError ? '#c84040' : '#3ef83e';
+  ctx.font = '30px VT323, monospace';
+  ctx.fillText(mpConnectError ? 'CONNECTION FAILED' : 'CONNECTING...', CW/2, CH/2 - 20);
+
+  if (mpConnectError) {
+    ctx.fillStyle = '#8a88a0';
+    ctx.font = '15px VT323, monospace';
+    ctx.fillText(mpConnectError, CW/2, CH/2 + 16);
+    const bw = 180, bh = 44, bx = CW/2 - bw/2, by = CH/2 + 50;
+    uiButton(ctx, bx, by, bw, bh, '[ BACK ]', () => { STATE = 'start'; });
+  }
+  ctx.textAlign = 'left';
+}
+
+function drawMpNameScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.90)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '30px VT323, monospace';
+  ctx.fillText('ENTER YOUR NAME', CW/2, CH/2 - 60);
+
+  const boxW = 300, boxH = 46, boxX = CW/2 - boxW/2, boxY = CH/2 - 20;
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = '#3ef83e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
+
+  const blink = Math.floor(Date.now()/500) % 2 === 0;
+  ctx.fillStyle = '#e0e0f0';
+  ctx.font = '22px VT323, monospace';
+  ctx.fillText(TextEntry.value + (blink ? '_' : ''), CW/2, boxY + boxH/2 + 7);
+
+  ctx.fillStyle = '#5a5870';
+  ctx.font = '14px VT323, monospace';
+  ctx.fillText('ENTER — CONFIRM        ESC — CANCEL', CW/2, boxY + boxH + 30);
+  ctx.textAlign = 'left';
+}
+
+function drawMpBrowseScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.90)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '30px VT323, monospace';
+  ctx.fillText('MULTIPLAYER LOBBIES', CW/2, 60);
+
+  if (TextEntry.active) {
+    ctx.fillStyle = '#8a88a0';
+    ctx.font = '18px VT323, monospace';
+    ctx.fillText('NAME YOUR LOBBY', CW/2, CH/2 - 60);
+
+    const boxW = 320, boxH = 46, boxX = CW/2 - boxW/2, boxY = CH/2 - 20;
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = '#3ef83e';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
+    const blink = Math.floor(Date.now()/500) % 2 === 0;
+    ctx.fillStyle = '#e0e0f0';
+    ctx.font = '20px VT323, monospace';
+    ctx.fillText(TextEntry.value + (blink ? '_' : ''), CW/2, boxY + boxH/2 + 7);
+
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '14px VT323, monospace';
+    ctx.fillText('ENTER — CREATE        ESC — CANCEL', CW/2, boxY + boxH + 30);
+    ctx.textAlign = 'left';
+    return;
+  }
+
+  const rowW = 480, rowH = 40, rowX = CW/2 - rowW/2;
+  let rowY = 96;
+  if (mpLobbies.length === 0) {
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '16px VT323, monospace';
+    ctx.fillText('No lobbies yet — be the first to host one.', CW/2, rowY + 20);
+    rowY += 44;
+  } else {
+    mpLobbies.slice(0, 8).forEach(l => {
+      uiButton(ctx, rowX, rowY, rowW, rowH,
+        l.name + '   (' + l.hostName + ')   ' + l.playerCount + '/' + l.maxPlayers,
+        () => { Net.send('join', { lobbyId: l.id }); },
+        { font: '15px VT323, monospace' });
+      rowY += rowH + 8;
+    });
+  }
+
+  rowY += 16;
+  const bw = 220, bh = 44, bx = CW/2 - bw/2;
+  uiButton(ctx, bx, rowY, bw, bh, '[ + CREATE LOBBY ]', () => {
+    TextEntry.start(mpPlayerName() + "'s Lobby", 24, name => {
+      Net.send('create', { name: (name || '').trim() || 'New Lobby' });
+    }, () => {});
+  });
+  rowY += bh + 12;
+  uiButton(ctx, bx, rowY, bw, 40, '[ BACK ]', () => { Net.close(); STATE = 'start'; });
+
+  if (mpErrorMsg && Date.now() < mpErrorUntil) {
+    ctx.fillStyle = '#c84040';
+    ctx.font = '14px VT323, monospace';
+    ctx.fillText(mpErrorMsg, CW/2, CH - 20);
+  }
+  ctx.textAlign = 'left';
+}
+
+function drawMpLobbyScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.90)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  if (!mpCurrentLobby) { ctx.textAlign = 'left'; return; }
+
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '30px VT323, monospace';
+  ctx.fillText(mpCurrentLobby.name, CW/2, 60);
+
+  ctx.fillStyle = '#5a5870';
+  ctx.font = '14px VT323, monospace';
+  ctx.fillText('WAITING FOR PLAYERS  (' + mpCurrentLobby.players.length + '/' + mpCurrentLobby.maxPlayers + ')', CW/2, 86);
+
+  let py = 130;
+  mpCurrentLobby.players.forEach(p => {
+    const isHostRow = p.id === mpCurrentLobby.hostId;
+    ctx.fillStyle = isHostRow ? '#f0c840' : '#c8c6e0';
+    ctx.font = '20px VT323, monospace';
+    ctx.fillText((isHostRow ? '★ ' : '') + p.name + (p.id === Net.playerId ? ' (you)' : ''), CW/2, py);
+    py += 30;
+  });
+
+  const isHost = Net.playerId === mpCurrentLobby.hostId;
+  const bw = 220, bh = 46, bx = CW/2 - bw/2;
+  let by = py + 30;
+  uiButton(ctx, bx, by, bw, bh, isHost ? '[ START MATCH ]' : 'WAITING FOR HOST...', () => {
+    if (isHost) Net.send('start');
+  }, { disabled: !isHost });
+  by += bh + 14;
+  uiButton(ctx, bx, by, bw, 40, '[ LEAVE LOBBY ]', () => {
+    Net.send('leave');
+    mpCurrentLobby = null;
+    STATE = 'mpBrowse';
+    Net.send('list');
+  });
+
+  ctx.textAlign = 'left';
+}
+
+function drawDeadScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.90)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#c84040';
+  ctx.font = '64px VT323, monospace';
+  ctx.fillText(mainTimer <= 0 ? 'TIME UP' : 'MISSION FAILED', CW/2, CH/2 - 100);
+
+  ctx.fillStyle = '#c8a840';
+  ctx.font = '28px VT323, monospace';
+  ctx.fillText('SCORE:  ' + score, CW/2, CH/2 - 40);
+  ctx.fillText('PEAK COMBO:  x' + peakCombo, CW/2, CH/2);
+
+  if (score >= highScore && score > 0) {
+    ctx.fillStyle = '#f0e040';
+    ctx.font = '22px VT323, monospace';
+    ctx.fillText('★  NEW HIGH SCORE  ★', CW/2, CH/2 + 40);
+  } else if (highScore > 0) {
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '18px VT323, monospace';
+    ctx.fillText('HIGH SCORE:  ' + highScore, CW/2, CH/2 + 40);
+  }
+
+  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '26px VT323, monospace';
+  ctx.fillText('CLICK OR PRESS ENTER TO RESTART', CW/2, CH/2 + 90);
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = '#5a5870';
+  ctx.font = '14px VT323, monospace';
+  ctx.fillText('PRESS L FOR LEADERBOARD', CW/2, CH/2 + 118);
+  ctx.textAlign = 'left';
+}
+
+function drawInitialsScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.90)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#f0e040';
+  ctx.font = '36px VT323, monospace';
+  ctx.fillText('NEW HIGH SCORE!', CW/2, CH/2 - 120);
+
+  ctx.fillStyle = '#c8a840';
+  ctx.font = '26px VT323, monospace';
+  ctx.fillText('SCORE:  ' + pendingScore, CW/2, CH/2 - 80);
+
+  ctx.fillStyle = '#8a88a0';
+  ctx.font = '16px VT323, monospace';
+  ctx.fillText('ENTER YOUR INITIALS', CW/2, CH/2 - 44);
+
+  // Three letter boxes, arcade-style
+  const boxW = 46, boxH = 56, gap = 16;
+  const startX = CW/2 - (boxW*3 + gap*2)/2;
+  const boxY = CH/2 - 20;
+  for (let i = 0; i < 3; i++) {
+    const bx = startX + i*(boxW+gap);
+    const active = i === initialsCursor;
+    ctx.fillStyle = active ? 'rgba(62,248,62,0.15)' : 'rgba(255,255,255,0.05)';
+    ctx.fillRect(bx, boxY, boxW, boxH);
+    ctx.strokeStyle = active ? '#3ef83e' : '#3a384e';
+    ctx.lineWidth = active ? 2 : 1;
+    ctx.strokeRect(bx, boxY, boxW, boxH);
+    ctx.fillStyle = active ? '#3ef83e' : '#e0e0f0';
+    ctx.font = '40px VT323, monospace';
+    ctx.fillText(initials[i], bx + boxW/2, boxY + boxH - 14);
+  }
+
+  ctx.fillStyle = '#5a5870';
+  ctx.font = '14px VT323, monospace';
+  ctx.fillText('TYPE LETTERS  OR  ↑ / ↓ TO CHANGE   ← / → TO MOVE', CW/2, boxY + boxH + 34);
+
+  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '20px VT323, monospace';
+  ctx.fillText('ENTER — SAVE SCORE        ESC — SKIP', CW/2, boxY + boxH + 68);
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+}
+
+function drawLeaderboardScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.92)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#f0c840';
+  ctx.font = '44px VT323, monospace';
+  ctx.fillText('LEADERBOARD', CW/2, 76);
+
+  const lb = leaderboardEntries.length ? leaderboardEntries : loadLeaderboard();
+  const colRank = CW/2 - 170, colInitials = CW/2 - 100, colScore = CW/2 + 170;
+  const startY = 130, rowH = 34;
+
+  if (lb.length === 0) {
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '18px VT323, monospace';
+    ctx.fillText('NO SCORES YET', CW/2, startY + 20);
+  }
+
+  lb.forEach((entry, i) => {
+    const y = startY + i * rowH;
+    const isNew = i === justSavedIndex;
+    ctx.font = (isNew ? 'bold ' : '') + '22px VT323, monospace';
+    ctx.fillStyle = isNew ? '#3ef83e' : (i === 0 ? '#f0e040' : '#c8c6e0');
+    ctx.textAlign = 'left';
+    ctx.fillText((i+1) + '.', colRank, y);
+    ctx.fillText(entry.initials, colInitials, y);
+    ctx.textAlign = 'right';
+    ctx.fillText(entry.score.toString().padStart(8,'0'), colScore, y);
+  });
+  ctx.textAlign = 'center';
+
+  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '22px VT323, monospace';
+  ctx.fillText('CLICK OR ENTER — PLAY AGAIN        ESC — BACK', CW/2, CH - 30);
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+}
+
+// === SCORING & TIMER ===
+
+function updateTimers(dt) {
+  if (STATE !== 'playing' && STATE !== 'mpPlaying') return;
+  // Non-host MP clients don't run the authoritative timer/spawn logic at all —
+  // they just receive mainTimer/elapsed via the host's periodic broadcast.
+  if (STATE === 'mpPlaying' && !isHost) return;
+
+  mainTimer -= dt;
+  elapsed   += dt;
+  if (mainTimer <= 0) {
+    mainTimer = 0;
+    if (STATE === 'mpPlaying') endMultiplayerMatch(); else endGame();
+    return;
+  }
+
+  if (STATE === 'mpPlaying') {
+    // Each player has an independent combo timer even though the enemy pool
+    // is shared — host is authoritative for all of them.
+    Object.values(playerScores).forEach(ps => {
+      if (ps.comboTimer > 0) {
+        ps.comboTimer -= dt * 1000;
+        if (ps.comboTimer <= 0) { ps.combo = 0; ps.comboTimer = 0; }
+      }
+    });
+  } else {
+    comboTimer -= dt * 1000;
+    if (comboTimer <= 0 && combo > 0) {
+      combo = 0;
+      comboTimer = 0;
+    }
+    if (comboMilestoneTimer > 0) comboMilestoneTimer -= dt * 1000;
+  }
+
+  // Spawn rate ramps up
+  spawnRate = Math.max(1.2, 3.0 - elapsed / 50);
+  spawnTimer += dt;
+  const waveSize = 1 + Math.floor(elapsed / 40);
+  if (spawnTimer >= spawnRate) {
+    spawnTimer = 0;
+    for (let i = 0; i < waveSize; i++) spawnEnemy();
+  }
+}
+
+function endGame() {
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem(HS_KEY, highScore);
+  }
+  pendingScore = score;
+  if (qualifiesForLeaderboard(score)) {
+    STATE = 'enterInitials';
+    initials = ['A','A','A'];
+    initialsCursor = 0;
+  } else {
+    STATE = 'dead';
+  }
+}
+
+// Shared player/world reset used by both single-player and multiplayer match
+// starts — loadout, position, camera snap, ammo, timers, and clearing the
+// enemy/bullet/pickup/particle/flash arrays.
+function resetPlayerForMatch() {
+  // Reset to the devtool-configured loadout — undoes any weapon pickups from a previous run.
+  Object.assign(EQUIPPED_RANGED, resolveEquippedWeapon('ranged'));
+  Object.assign(EQUIPPED_MELEE, resolveEquippedWeapon('melee'));
+  player.x = MAP_CONFIG.playerStart.x; player.y = MAP_CONFIG.playerStart.y;
+  // Snap the camera straight to the player instead of panning in from (0,0) —
+  // matters once maps are bigger than one screen.
+  camera.x = Math.max(0, Math.min(MAP_W - CW, player.x - CW/2));
+  camera.y = Math.max(0, Math.min(MAP_H - CH, player.y - CH/2));
+  player.hp = CONFIG.PLAYER.hp; player.maxHp = CONFIG.PLAYER.hp;
+  player.mag = Math.min(EQUIPPED_RANGED.magSize, EQUIPPED_RANGED.ammo);
+  player.reserve = EQUIPPED_RANGED.ammo - player.mag;
+  player.reloading = false; player.reloadTimer = 0;
+  player.rawAngle = 0; player.facing = 'S'; player.meleeCd = 0; player.fireCd = 0;
+  player.flashTimer = 0; player.invincible = 0;
+  enemies = []; bullets = []; pickups = []; particles = []; flashes = [];
+  mainTimer = 150; elapsed = 0;
+  spawnTimer = 0; spawnRate = 3.0;
+}
+
+function startGame() {
+  STATE = 'playing';
+  resetPlayerForMatch();
+  score = 0; combo = 0; comboTimer = 0; comboMilestone = ''; comboMilestoneTimer = 0;
+  peakCombo = 0;
+  justSavedIndex = -1;
+}
+
+// === GAME LOOP ===
+
+const ctx = canvas.getContext('2d');
+let lastTime = 0;
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+
+  uiButtons = []; // repopulated by whichever menu screen draws this frame
+
+  SPRITES.updateAnims(dt);
+
+  const mpActive = STATE === 'mpPlaying';
+  if (STATE === 'playing' || mpActive) {
+    updateTimers(dt);
+    updatePlayer(dt);
+    updateEnemies(dt);
+    updateBullets(dt);
+    updatePickups(dt);
+    updateParticles(dt);
+    updateFlashes(dt);
+    if (mpActive) {
+      updateRemotePlayers(dt);
+      updateMultiplayerNet(dt);
+    }
+  }
+
+  // Render — world-space (camera transform)
+  const frozenOverlay = STATE === 'dead' || STATE === 'enterInitials' || STATE === 'leaderboard' || STATE === 'mpEnded';
+  ctx.save();
+  ctx.translate(-Math.round(camera.x), -Math.round(camera.y));
+  drawMap(ctx);
+  if (STATE === 'playing' || mpActive || frozenOverlay) {
+    drawPickups(ctx);
+    drawBullets(ctx);
+    drawEnemies(ctx);
+    if (mpActive) drawRemotePlayers(ctx);
+    drawPlayer(ctx);
+    drawParticles(ctx);
+    drawFlashes(ctx);
+  }
+  ctx.restore();
+
+  // Screen-space (HUD + overlays)
+  if (STATE === 'playing' || frozenOverlay) drawHUD(ctx);
+  if (mpActive) drawMpHUD(ctx);
+  if (STATE === 'start')         drawStartScreen(ctx);
+  if (STATE === 'dead')          drawDeadScreen(ctx);
+  if (STATE === 'enterInitials') drawInitialsScreen(ctx);
+  if (STATE === 'leaderboard')   drawLeaderboardScreen(ctx);
+  if (STATE === 'settings')      drawSettingsScreen(ctx);
+  if (STATE === 'mpConnect')     drawMpConnectScreen(ctx);
+  if (STATE === 'mpName')        drawMpNameScreen(ctx);
+  if (STATE === 'mpBrowse')      drawMpBrowseScreen(ctx);
+  if (STATE === 'mpLobby')       drawMpLobbyScreen(ctx);
+  if (STATE === 'mpEnded')       drawMpEndedScreen(ctx);
+}
+
+// === INIT ===
+
+SPRITES.load();
+
+canvas.addEventListener('click', e => {
+  const r = canvas.getBoundingClientRect();
+  const cx = (e.clientX - r.left) * (CW / r.width);
+  const cy = (e.clientY - r.top)  * (CH / r.height);
+  const hit = uiButtons.find(b => cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h);
+  if (hit) { hit.action(); return; }
+  if (STATE === 'dead' || STATE === 'leaderboard') startGame();
+});
+window.addEventListener('keydown', e => {
+  if (TextEntry.active) { TextEntry.handleKey(e); return; }
+  if (STATE === 'enterInitials') { handleInitialsKey(e); return; }
+  if (STATE === 'leaderboard') {
+    if (e.key === 'Enter') startGame();
+    else if (e.key === 'Escape') STATE = 'start';
+    return;
+  }
+  if ((STATE === 'start' || STATE === 'dead') && e.key.toLowerCase() === 'l') {
+    leaderboardEntries = loadLeaderboard();
+    justSavedIndex = -1;
+    STATE = 'leaderboard';
+    return;
+  }
+  if (e.key === 'Enter' && (STATE === 'start' || STATE === 'dead')) startGame();
+  if (e.key === 'Escape' && STATE === 'mpBrowse') { Net.close(); STATE = 'start'; }
+  if (e.key === 'Escape' && STATE === 'mpLobby') {
+    Net.send('leave');
+    mpCurrentLobby = null;
+    STATE = 'mpBrowse';
+    Net.send('list');
+  }
+  if (e.key === 'Escape' && STATE === 'settings') STATE = 'start';
+  if (e.key === 'Escape' && STATE === 'mpConnect' && mpConnectError) STATE = 'start';
+});
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

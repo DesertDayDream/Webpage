@@ -1,0 +1,2115 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MERCS — Dev Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0d0b12;
+    --surface:  #13111c;
+    --surface2: #1a1826;
+    --border:   #2e2c40;
+    --border2:  #3e3c58;
+    --green:    #3ef83e;
+    --green-dim:#1a6e1a;
+    --amber:    #c8a840;
+    --red:      #c84040;
+    --text:     #c8c6e0;
+    --text-dim: #5a5870;
+    --mono:     'Share Tech Mono', 'Courier New', monospace;
+    --vt:       'VT323', monospace;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:var(--mono); font-size:13px; min-height:100vh; }
+
+  /* ── TOP BAR ── */
+  #topbar {
+    background:var(--surface); border-bottom:1px solid var(--border);
+    padding:10px 20px; display:flex; align-items:center; gap:20px;
+  }
+  #topbar .logo { font-family:var(--vt); font-size:22px; color:var(--green); letter-spacing:2px; }
+  #topbar .sub  { color:var(--text-dim); font-size:11px; }
+  #topbar .spacer { flex:1; }
+  .btn {
+    font-family:var(--mono); font-size:12px; color:var(--text);
+    background:var(--surface2); border:1px solid var(--border2);
+    padding:5px 14px; cursor:pointer; letter-spacing:1px;
+    transition: border-color .15s, color .15s;
+  }
+  .btn:hover { border-color:var(--green); color:var(--green); }
+  .btn.primary { border-color:var(--green); color:var(--green); }
+  .btn.primary:hover { background:var(--green-dim); }
+  .btn.danger { border-color:var(--red); color:var(--red); }
+  .btn.danger:hover { background:rgba(200,64,64,.15); }
+
+  /* ── LAYOUT ── */
+  #body { display:flex; gap:0; height:calc(100vh - 45px); }
+  #main-col { flex:1; overflow-y:auto; padding:20px; }
+  #side-col { width:280px; border-left:1px solid var(--border); padding:16px; display:flex; flex-direction:column; gap:16px; overflow-y:auto; }
+
+  /* ── SECTION HEADERS ── */
+  .section-title {
+    font-family:var(--vt); font-size:16px; color:var(--text-dim);
+    border-bottom:1px solid var(--border); padding-bottom:6px; margin-bottom:14px;
+    letter-spacing:2px;
+  }
+  .section-title span { color:var(--green); }
+
+  /* ── SPRITE SLOT ── */
+  .slot-row {
+    background:var(--surface); border:1px solid var(--border);
+    margin-bottom:10px; display:flex; align-items:stretch; gap:0;
+    transition: border-color .15s;
+  }
+  .slot-row:hover { border-color:var(--border2); }
+  .slot-row.has-custom { border-color:var(--green-dim); }
+
+  .slot-preview {
+    width:72px; height:72px; flex-shrink:0;
+    background:#0d0b12; border-right:1px solid var(--border);
+    display:flex; align-items:center; justify-content:center; overflow:hidden;
+    position:relative;
+  }
+  .slot-preview canvas { display:block; image-rendering:pixelated; }
+  .slot-preview .anim-badge {
+    position:absolute; bottom:2px; right:2px;
+    font-size:9px; color:var(--amber); background:rgba(0,0,0,.7);
+    padding:1px 3px; pointer-events:none;
+  }
+
+  .slot-info { flex:1; padding:8px 12px; display:flex; flex-direction:column; justify-content:center; gap:4px; }
+  .slot-name { font-family:var(--vt); font-size:18px; color:var(--text); letter-spacing:1px; }
+  .slot-status { font-size:11px; color:var(--text-dim); }
+  .slot-status.custom { color:var(--green); }
+
+  .slot-actions { display:flex; flex-direction:column; justify-content:center; gap:6px; padding:8px; border-left:1px solid var(--border); }
+
+  /* ── EQUIP TOGGLE ── */
+  .equip-toggle {
+    display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;
+    font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-top:2px;
+  }
+  .equip-toggle input { display:none; }
+  .equip-slider {
+    position:relative; width:28px; height:15px; flex-shrink:0;
+    background:var(--surface2); border:1px solid var(--border2); border-radius:8px;
+    transition: background .15s, border-color .15s;
+  }
+  .equip-slider::before {
+    content:''; position:absolute; top:1px; left:1px; width:11px; height:11px;
+    background:var(--text-dim); border-radius:50%; transition: transform .15s, background .15s;
+  }
+  .equip-toggle input:checked + .equip-slider { background:var(--green-dim); border-color:var(--green); }
+  .equip-toggle input:checked + .equip-slider::before { transform:translateX(13px); background:var(--green); }
+  .equip-toggle input:checked ~ .equip-label { color:var(--green); }
+
+  /* ── UPLOAD AREA ── */
+  .drop-zone {
+    border:1px dashed var(--border2); background:var(--surface2);
+    padding:12px; text-align:center; cursor:pointer; color:var(--text-dim);
+    font-size:12px; transition: border-color .15s, color .15s;
+  }
+  .drop-zone:hover, .drop-zone.dragover { border-color:var(--green); color:var(--green); }
+
+  /* ── SIDE PANEL ── */
+  #live-preview-canvas { display:block; width:100%; image-rendering:pixelated; border:1px solid var(--border); background:#0d0b12; }
+
+  /* ── STATUS BAR ── */
+  #status-bar {
+    position:fixed; bottom:0; left:0; right:0;
+    background:var(--surface); border-top:1px solid var(--border);
+    padding:4px 20px; font-size:11px; color:var(--text-dim);
+    display:flex; gap:20px;
+  }
+  #status-bar span { color:var(--green); }
+
+  /* ── SELECTED SLOT ── */
+  .slot-row.selected { border-color:var(--amber) !important; box-shadow:0 0 0 1px var(--amber); }
+
+  /* ── CONSTANTS PANEL ── */
+  #constants-panel { display:flex; flex-direction:column; gap:0; }
+  #constants-panel .const-title { font-family:var(--vt); font-size:15px; color:var(--amber); margin-bottom:10px; letter-spacing:1px; }
+  #constants-panel .const-empty { font-size:11px; color:var(--text-dim); }
+  .const-field { display:flex; flex-direction:column; gap:2px; margin-bottom:8px; }
+  .const-label { font-size:10px; color:var(--text-dim); display:flex; justify-content:space-between; }
+  .const-label .cv { color:var(--amber); }
+  .const-row { display:flex; align-items:center; gap:6px; }
+  .const-row input[type=range] { flex:1; accent-color:var(--amber); height:4px; }
+  .const-row input[type=number] { width:54px; background:var(--surface); border:1px solid var(--border2); color:var(--text); font-family:var(--mono); font-size:11px; padding:2px 4px; }
+  .const-btns { display:flex; gap:6px; margin-top:10px; }
+  .const-btns .btn { flex:1; font-size:11px; }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width:6px; }
+  ::-webkit-scrollbar-track { background:var(--surface); }
+  ::-webkit-scrollbar-thumb { background:var(--border2); }
+
+  /* ── MODAL ANCHOR ── */
+  body { position:relative; }
+
+  /* ── COMPASS ROSE ── */
+  .compass-rose { display:grid; grid-template-columns:repeat(3,72px); gap:4px; margin-bottom:12px; }
+  .compass-cell {
+    width:72px; height:72px; background:var(--surface); border:1px solid var(--border);
+    cursor:pointer; display:flex; align-items:center; justify-content:center;
+    position:relative; overflow:hidden;
+  }
+  .compass-cell:hover { border-color:var(--border2); }
+  .compass-cell.active { border-color:var(--green) !important; background:rgba(62,248,62,.05); box-shadow:0 0 0 1px var(--green); }
+  .compass-cell.has-custom { border-color:var(--green-dim); }
+  .compass-cell canvas { display:block; image-rendering:pixelated; }
+  .compass-cell .dir-label { position:absolute; bottom:2px; left:0; right:0; text-align:center; font-size:9px; color:var(--text-dim); pointer-events:none; }
+  .compass-center { background:var(--bg); border:1px solid var(--border); cursor:default; }
+  .compass-center:hover { border-color:var(--border); }
+  .compass-detail { margin-bottom:12px; padding:10px 12px; background:var(--surface); border:1px solid var(--border); }
+  .compass-detail .cd-name { font-family:var(--vt); font-size:18px; color:var(--text); margin-bottom:8px; }
+  .compass-detail .cd-actions { display:flex; gap:6px; flex-wrap:wrap; }
+
+  /* ── ANCHOR EDITOR ── */
+  .anchor-wrap { position:relative; display:inline-block; margin-bottom:8px; }
+  .anchor-canvas { display:block; image-rendering:pixelated; border:1px solid var(--border2); }
+  .anchor-handle {
+    position:absolute; width:12px; height:12px; border-radius:50%;
+    border:2px solid #fff; cursor:grab; transform:translate(-50%,-50%);
+    box-shadow:0 0 4px rgba(0,0,0,.8); pointer-events:all;
+  }
+  .anchor-grip   { background:var(--green); }
+  .anchor-barrel { background:var(--red); }
+  .anchor-coords { font-size:10px; color:var(--text-dim); line-height:1.7; margin-top:4px; }
+
+  /* ── CHARACTER GENERATOR MODAL ── */
+  #gen-overlay {
+    display:none; position:absolute; top:0; left:0; width:100%; min-height:100%;
+    background:rgba(0,0,0,0.92); z-index:1000; justify-content:center; align-items:flex-start;
+    padding:40px 20px;
+  }
+  #gen-overlay.open { display:flex; }
+  #gen-box {
+    background:var(--surface); border:1px solid var(--border2);
+    display:flex; flex-direction:column; width:100%; max-width:700px;
+  }
+  #gen-topbar {
+    background:var(--bg); border-bottom:1px solid var(--border);
+    padding:10px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0;
+  }
+  .gen-title { font-family:var(--vt); font-size:20px; color:var(--green); letter-spacing:2px; flex:1; }
+  #gen-body { display:flex; gap:0; flex:1; overflow:auto; }
+  #gen-main { padding:16px; display:flex; flex-direction:column; align-items:flex-start; gap:8px; flex-shrink:0; }
+  #gen-compass { grid-template-columns:repeat(3,64px); }
+  #gen-compass .compass-cell { width:64px; height:64px; }
+  #gen-detail-canvas { display:block; image-rendering:pixelated; border:1px solid var(--border2); background:#0d0b12; }
+  #gen-right {
+    width:260px; border-left:1px solid var(--border); padding:12px;
+    display:flex; flex-direction:column; gap:6px; overflow-y:auto; flex-shrink:0;
+  }
+  .gen-section { font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-top:6px; border-bottom:1px solid var(--border); padding-bottom:3px; }
+  .gen-row { display:flex; align-items:center; gap:8px; }
+  .gen-label { font-size:11px; color:var(--text-dim); min-width:54px; }
+  .gen-build-lbl { font-size:11px; color:var(--amber); min-width:48px; }
+  .gen-presets { display:flex; gap:6px; flex-wrap:wrap; }
+  .gen-presets .btn { font-size:11px; padding:3px 8px; }
+  .gen-swatches { display:flex; gap:5px; margin-top:2px; }
+  .gen-swatch { width:22px; height:22px; border:1px solid var(--border2); cursor:pointer; }
+  .gen-swatch:hover { outline:2px solid var(--green); outline-offset:1px; }
+  .gen-checkbox-row { display:flex; align-items:center; gap:8px; font-size:11px; }
+  .gen-checkbox-row input[type=checkbox] { accent-color:var(--green); }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo">MERCS DEV</div>
+  <div class="sub">&gt; sprite_manager.exe</div>
+  <div class="spacer"></div>
+  <button class="btn" id="btn-map-editor">[ Map Editor ]</button>
+  <button class="btn primary" id="btn-launch">[ Launch Game ]</button>
+</div>
+
+<div id="body">
+  <div id="main-col">
+    <div class="section-title">&gt; <span>CHARACTERS</span> // player</div>
+    <div id="group-characters"></div>
+
+    <div class="section-title" style="margin-top:20px; display:flex; align-items:center; justify-content:space-between;">
+      <span>&gt; <span>ENEMIES</span> // hostile units</span>
+      <button class="btn" id="btn-add-enemy" style="font-size:11px; padding:3px 10px;">[ + Add ]</button>
+    </div>
+    <div id="group-enemies"></div>
+
+    <div class="section-title" style="margin-top:20px; display:flex; align-items:center; justify-content:space-between;">
+      <span>&gt; <span>RANGED WEAPONS</span> // pistols, rifles</span>
+      <button class="btn" id="btn-add-ranged" style="font-size:11px; padding:3px 10px;">[ + Add ]</button>
+    </div>
+    <div id="group-ranged-weapons"></div>
+
+    <div class="section-title" style="margin-top:20px; display:flex; align-items:center; justify-content:space-between;">
+      <span>&gt; <span>MELEE WEAPONS</span> // knives, bats, blades</span>
+      <button class="btn" id="btn-add-melee" style="font-size:11px; padding:3px 10px;">[ + Add ]</button>
+    </div>
+    <div id="group-melee-weapons"></div>
+
+    <div class="section-title" style="margin-top:20px;">&gt; <span>PICKUPS</span> // drops &amp; collectibles</div>
+    <div id="group-pickups"></div>
+
+  </div>
+
+  <div id="side-col">
+    <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
+      <span>&gt; <span>LIVE PREVIEW</span></span>
+      <button class="btn" id="btn-edit-sprite" style="font-size:11px; padding:3px 10px;">[ Edit ]</button>
+    </div>
+    <canvas id="live-preview-canvas" width="248" height="248"></canvas>
+    <div id="preview-label" style="font-size:11px;color:var(--text-dim);margin-top:4px;text-align:center;"></div>
+
+    <div class="section-title">&gt; <span>STORAGE</span></div>
+    <div id="storage-info" style="font-size:11px;color:var(--text-dim);line-height:1.8;"></div>
+    <button class="btn danger" id="btn-clear-all" style="margin-top:8px;">[ Clear All Sprites ]</button>
+
+    <div class="section-title">&gt; <span>CONSTANTS</span></div>
+    <div id="constants-panel">
+      <div class="const-empty">Click a sprite slot to<br>edit its game constants.</div>
+    </div>
+  </div>
+</div>
+
+<div id="status-bar">
+  <div>slots: <span id="stat-slots">0</span></div>
+  <div>custom: <span id="stat-custom">0</span></div>
+  <div>storage: <span id="stat-storage">0 KB</span></div>
+  <div id="stat-msg" style="color:var(--green);"></div>
+</div>
+
+<script>
+'use strict';
+
+// === SPRITE DEFINITIONS (mirrored from game.html) ===
+
+const SPRITE_GROUPS = {
+  characters:    ['PLAYER_N','PLAYER_NE','PLAYER_E','PLAYER_SE','PLAYER_S','PLAYER_SW','PLAYER_W','PLAYER_NW'],
+  enemies:       ['ENEMY_BASIC', 'ENEMY_FAST', 'ENEMY_BRUTE'],
+  rangedWeapons: ['WEAPON_PISTOL'],
+  meleeWeapons:  ['WEAPON_KNIFE'],
+  pickups:       ['PICKUP_AMMO', 'PICKUP_HEALTH', 'PICKUP_WEAPON'],
+};
+const BUILTIN_NAMES = [
+  ...SPRITE_GROUPS.characters,
+  ...SPRITE_GROUPS.enemies,
+  ...SPRITE_GROUPS.rangedWeapons,
+  ...SPRITE_GROUPS.meleeWeapons,
+  ...SPRITE_GROUPS.pickups,
+];
+
+function _playerSprite(dx, dy) {
+  return function(ctx, w, h) {
+    const cx = w/2, cy = h/2, hd = 4;
+    ctx.fillStyle = '#2a6e2a';
+    ctx.beginPath(); ctx.ellipse(cx,cy, w/2-2, h/2-2, 0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#4ec94e';
+    ctx.beginPath(); ctx.ellipse(cx,cy, w/2-5, h/2-5, 0,0,Math.PI*2); ctx.fill();
+    const hx = cx + dx*hd, hy = cy + dy*hd;
+    ctx.fillStyle = '#7ef07e';
+    ctx.beginPath(); ctx.ellipse(hx, hy, 5, 4, Math.atan2(dy,dx), 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(hx+dx*4, hy+dy*4, 1.5, 0, Math.PI*2); ctx.fill();
+  };
+}
+const _D = 0.7071;
+
+const SPRITE_FNS = {
+  PLAYER_E:  _playerSprite( 1,   0),
+  PLAYER_SE: _playerSprite( _D,  _D),
+  PLAYER_S:  _playerSprite( 0,   1),
+  PLAYER_SW: _playerSprite(-_D,  _D),
+  PLAYER_W:  _playerSprite(-1,   0),
+  PLAYER_NW: _playerSprite(-_D, -_D),
+  PLAYER_N:  _playerSprite( 0,  -1),
+  PLAYER_NE: _playerSprite( _D, -_D),
+  ENEMY_BASIC(ctx, w, h) {
+    ctx.fillStyle = '#8a1818'; ctx.fillRect(2,2,w-4,h-4);
+    ctx.fillStyle = '#c04040'; ctx.fillRect(4,4,w-8,h-8);
+    ctx.fillStyle = '#f0f040';
+    ctx.fillRect(w/2-6,h/2-4,5,5); ctx.fillRect(w/2+1,h/2-4,5,5);
+    ctx.fillStyle = '#f04040'; ctx.fillRect(w/2-5,h/2+3,10,3);
+  },
+  ENEMY_FAST(ctx, w, h) {
+    ctx.fillStyle = '#a04010';
+    ctx.beginPath(); ctx.moveTo(w/2,2); ctx.lineTo(w-2,h-2); ctx.lineTo(2,h-2); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#e07830';
+    ctx.beginPath(); ctx.moveTo(w/2,6); ctx.lineTo(w-6,h-6); ctx.lineTo(6,h-6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillRect(w/2-2,h/2,4,4);
+  },
+  ENEMY_BRUTE(ctx, w, h) {
+    ctx.fillStyle = '#3a1060'; ctx.fillRect(0,0,w,h);
+    ctx.fillStyle = '#7840c0'; ctx.fillRect(3,3,w-6,h-6);
+    ctx.fillStyle = '#c080ff'; ctx.fillRect(6,6,w-12,h-12);
+    ctx.fillStyle = '#4a1880';
+    ctx.fillRect(4,0,8,10); ctx.fillRect(w-12,0,8,10);
+    ctx.fillStyle = '#ff4040';
+    ctx.fillRect(w/2-7,h/2-4,6,6); ctx.fillRect(w/2+1,h/2-4,6,6);
+  },
+  WEAPON_PISTOL(ctx, w, h) {
+    ctx.fillStyle = '#3a3848'; ctx.fillRect(2,h/2-4,w-4,8);
+    ctx.fillStyle = '#5a5870'; ctx.fillRect(2,h/2-3,w-8,6);
+    ctx.fillStyle = '#8a8898'; ctx.fillRect(w-8,h/2-2,8,4);
+  },
+  WEAPON_KNIFE(ctx, w, h) {
+    // Blade
+    ctx.fillStyle = '#b0b8c8';
+    ctx.beginPath();
+    ctx.moveTo(w/2, 4);
+    ctx.lineTo(w/2+5, h*0.6);
+    ctx.lineTo(w/2-5, h*0.6);
+    ctx.closePath();
+    ctx.fill();
+    // Edge sheen
+    ctx.fillStyle = '#e8eef8';
+    ctx.beginPath();
+    ctx.moveTo(w/2, 6);
+    ctx.lineTo(w/2+2, h*0.55);
+    ctx.lineTo(w/2-1, h*0.55);
+    ctx.closePath();
+    ctx.fill();
+    // Guard
+    ctx.fillStyle = '#786040';
+    ctx.fillRect(w/2-8, h*0.6-2, 16, 5);
+    // Handle
+    ctx.fillStyle = '#5a3820';
+    ctx.fillRect(w/2-4, h*0.6+3, 8, h*0.3);
+    // Handle wrapping
+    ctx.fillStyle = '#3a2410';
+    for (let i = 0; i < 3; i++) {
+      ctx.fillRect(w/2-4, h*0.6+5 + i*6, 8, 2);
+    }
+  },
+  PICKUP_AMMO(ctx, w, h) {
+    ctx.fillStyle = '#6a5018'; ctx.fillRect(2,3,w-4,h-6);
+    ctx.fillStyle = '#c8a840'; ctx.fillRect(4,5,w-8,h-10);
+    ctx.fillStyle = '#f0d060'; ctx.fillRect(6,7,w-12,4);
+  },
+  PICKUP_HEALTH(ctx, w, h) {
+    ctx.fillStyle = '#3a0808';
+    ctx.beginPath(); ctx.arc(w/2,h/2,w/2-1,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#e03030';
+    ctx.beginPath(); ctx.arc(w/2,h/2,w/2-3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#f8f8f8';
+    ctx.fillRect(w/2-2,4,4,h-8); ctx.fillRect(4,h/2-2,w-8,4);
+  },
+  PICKUP_WEAPON(ctx, w, h) {
+    // Loot crate — represents "a weapon may drop" in the pool, not a specific
+    // gun's look (in-game, weapon drops render using that weapon's own sprite).
+    ctx.fillStyle = '#3a3020'; ctx.fillRect(2,4,w-4,h-6);
+    ctx.fillStyle = '#6a5838'; ctx.fillRect(4,6,w-8,h-10);
+    ctx.fillStyle = '#c8a840'; ctx.fillRect(2,4,w-4,2); ctx.fillRect(2,h-4,w-4,2);
+    ctx.fillStyle = '#e8d090'; ctx.fillRect(w/2-5,h/2-1,10,2);
+  },
+};
+
+// === CONSTANTS DEFINITIONS (mirrored from game.html _C_DEFAULTS) ===
+
+const SPRITE_TO_CONFIG = {
+  PLAYER_N:  'PLAYER',
+  PLAYER_NE: 'PLAYER',
+  PLAYER_E:  'PLAYER',
+  PLAYER_SE: 'PLAYER',
+  PLAYER_S:  'PLAYER',
+  PLAYER_SW: 'PLAYER',
+  PLAYER_W:  'PLAYER',
+  PLAYER_NW: 'PLAYER',
+  ENEMY_BASIC:   'ENEMY_BASIC',
+  ENEMY_FAST:    'ENEMY_FAST',
+  ENEMY_BRUTE:   'ENEMY_BRUTE',
+  WEAPON_PISTOL: 'WEAPON_PISTOL',
+  WEAPON_KNIFE:  'WEAPON_KNIFE',
+  PICKUP_AMMO:   'PICKUP_AMMO',
+  PICKUP_HEALTH: 'PICKUP_HEALTH',
+  PICKUP_WEAPON: 'PICKUP_WEAPON',
+};
+
+const CONSTANT_DEFAULTS = {
+  PLAYER:        { speed:190, hp:100 },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0 },
+  WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
+  ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100 },
+  ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100 },
+  ENEMY_BRUTE:   { speed:36,  hp:220, dmg:28,  score:350, size:30, unlockAt:60, spawnChance:100 },
+  PICKUP_AMMO:   { dropChance:28, amountMin:5,  amountMax:10 },
+  PICKUP_HEALTH: { dropChance:14, healMin:20,   healMax:40   },
+  PICKUP_WEAPON: { dropChance:8 },
+};
+
+const CONSTANT_SCHEMAS = {
+  PLAYER: [
+    { key:'speed', label:'Move Speed', min:50, max:500, step:5, unit:'px/s' },
+    { key:'hp',    label:'Max HP',     min:10, max:500, step:5, unit:'HP'   },
+  ],
+  WEAPON_PISTOL: [
+    { key:'fireMode',    label:'Fire Mode',      type:'select', options:['semi','auto']   },
+    { key:'fireDelay',   label:'Fire Delay',     min:30,  max:1000, step:10, unit:'ms'   },
+    { key:'ammo',        label:'Starting Ammo',  min:1,   max:200,  step:1,  unit:''     },
+    { key:'magSize',     label:'Magazine Size',  min:1,   max:100,  step:1,  unit:''     },
+    { key:'reloadTime',  label:'Reload Time',    min:200, max:5000, step:50, unit:'ms'   },
+    { key:'bulletDmg',   label:'Bullet DMG',     min:1,   max:200,  step:1,  unit:''     },
+    { key:'bulletSpeed', label:'Bullet Speed',   min:100, max:1000, step:10, unit:'px/s' },
+    { key:'bulletRange', label:'Bullet Range',   min:50,  max:2000, step:10, unit:'px'   },
+    { key:'pelletCount', label:'Pellet Count',   min:1,   max:20,   step:1,  unit:''     },
+    { key:'spreadAngle', label:'Spread',         min:0,   max:45,   step:0.5,unit:'°'    },
+  ],
+  WEAPON_KNIFE: [
+    { key:'meleeDmg',   label:'Melee DMG',      min:1,   max:500,  step:1,  unit:''   },
+    { key:'meleeRange', label:'Melee Range',    min:10,  max:300,  step:2,  unit:'px' },
+    { key:'meleeCd',    label:'Melee Cooldown', min:100, max:5000, step:50, unit:'ms' },
+  ],
+  ENEMY_BASIC: [
+    { key:'speed',       label:'Move Speed',   min:10,  max:500,  step:5,  unit:'px/s' },
+    { key:'hp',          label:'HP',           min:1,   max:1000, step:5,  unit:'HP'   },
+    { key:'dmg',         label:'Contact DMG',  min:1,   max:200,  step:1,  unit:''     },
+    { key:'score',       label:'Score',        min:10,  max:5000, step:10, unit:''     },
+    { key:'size',        label:'Size',         min:6,   max:80,   step:2,  unit:'px'   },
+    { key:'unlockAt',    label:'Unlock At',    min:0,   max:120,  step:5,  unit:'s'    },
+    { key:'spawnChance', label:'Spawn Chance', min:0,   max:100,  step:5,  unit:'%'    },
+  ],
+  ENEMY_FAST: [
+    { key:'speed',       label:'Move Speed',   min:10,  max:500,  step:5,  unit:'px/s' },
+    { key:'hp',          label:'HP',           min:1,   max:1000, step:5,  unit:'HP'   },
+    { key:'dmg',         label:'Contact DMG',  min:1,   max:200,  step:1,  unit:''     },
+    { key:'score',       label:'Score',        min:10,  max:5000, step:10, unit:''     },
+    { key:'size',        label:'Size',         min:6,   max:80,   step:2,  unit:'px'   },
+    { key:'unlockAt',    label:'Unlock At',    min:0,   max:120,  step:5,  unit:'s'    },
+    { key:'spawnChance', label:'Spawn Chance', min:0,   max:100,  step:5,  unit:'%'    },
+  ],
+  ENEMY_BRUTE: [
+    { key:'speed',       label:'Move Speed',   min:10,  max:500,  step:5,  unit:'px/s' },
+    { key:'hp',          label:'HP',           min:1,   max:1000, step:5,  unit:'HP'   },
+    { key:'dmg',         label:'Contact DMG',  min:1,   max:200,  step:1,  unit:''     },
+    { key:'score',       label:'Score',        min:10,  max:5000, step:10, unit:''     },
+    { key:'size',        label:'Size',         min:6,   max:80,   step:2,  unit:'px'   },
+    { key:'unlockAt',    label:'Unlock At',    min:0,   max:120,  step:5,  unit:'s'    },
+    { key:'spawnChance', label:'Spawn Chance', min:0,   max:100,  step:5,  unit:'%'    },
+  ],
+  PICKUP_AMMO: [
+    { key:'dropChance', label:'Drop Chance', min:0,  max:100, step:1, unit:'%'  },
+    { key:'amountMin',  label:'Ammo Min',    min:1,  max:100, step:1, unit:''   },
+    { key:'amountMax',  label:'Ammo Max',    min:1,  max:100, step:1, unit:''   },
+  ],
+  PICKUP_HEALTH: [
+    { key:'dropChance', label:'Drop Chance', min:0,  max:100, step:1, unit:'%'  },
+    { key:'healMin',    label:'Heal Min',    min:1,  max:200, step:1, unit:'HP' },
+    { key:'healMax',    label:'Heal Max',    min:1,  max:200, step:1, unit:'HP' },
+  ],
+  PICKUP_WEAPON: [
+    { key:'dropChance', label:'Drop Chance', min:0,  max:100, step:1, unit:'%'  },
+  ],
+};
+
+function loadSavedConstants() {
+  try { return JSON.parse(localStorage.getItem('mercs_constants') || '{}'); } catch(e) { return {}; }
+}
+
+function saveMercsConstants(obj) {
+  localStorage.setItem('mercs_constants', JSON.stringify(obj));
+}
+
+// === STATE ===
+
+let selectedSlot = null;
+// Unified "currently selected sprite" — updated by selectSlot() regardless of whether
+// selection came from a compass cell (characters) or a slot row (everything else).
+// Drives the live preview panel and the Edit button.
+let currentSpriteName = 'PLAYER_S';
+
+// Per-slot state: { name, frames:[], fps:12, image:HTMLImageElement|null, isAnim:bool }
+const slotState = {};
+
+function getSlotData(name) {
+  if (!slotState[name]) {
+    slotState[name] = { name, frames:[], fps:12, image:null, isAnim:false, animTimer:0, animFrame:0 };
+    reloadSlotFromStorage(name);
+  }
+  return slotState[name];
+}
+
+function reloadSlotFromStorage(name) {
+  const s = slotState[name];
+  const framesRaw = localStorage.getItem('sprite_' + name + '_frames');
+  if (framesRaw) {
+    try {
+      const urls = JSON.parse(framesRaw);
+      const fps  = parseInt(localStorage.getItem('sprite_' + name + '_fps') || '12');
+      s.frames = urls.map(url => { const img = new Image(); img.src = url; return img; });
+      s.fps = fps; s.isAnim = true; s.image = null;
+      return;
+    } catch(e) {}
+  }
+  const url = localStorage.getItem('sprite_' + name);
+  if (url) {
+    const img = new Image();
+    img.onload = () => { updateSlotPreview(name); updateLivePreview(); };
+    img.src = url;
+    s.image = img; s.isAnim = false; s.frames = [];
+  } else {
+    s.image = null; s.isAnim = false; s.frames = [];
+  }
+}
+
+function isCustom(name) {
+  return !!(localStorage.getItem('sprite_' + name) ||
+            localStorage.getItem('sprite_' + name + '_frames'));
+}
+
+// === ANIMATION STATES ===
+
+const SPRITE_ANIM_STATES = {
+  PLAYER_N:  ['idle', 'walk', 'attack', 'damage', 'death'],
+  PLAYER_NE: ['idle', 'walk', 'attack', 'damage', 'death'],
+  PLAYER_E:  ['idle', 'walk', 'attack', 'damage', 'death'],
+  PLAYER_SE: ['idle', 'walk', 'attack', 'damage', 'death'],
+  PLAYER_S:  ['idle', 'walk', 'attack', 'damage', 'death'],
+  PLAYER_SW: ['idle', 'walk', 'attack', 'damage', 'death'],
+  PLAYER_W:  ['idle', 'walk', 'attack', 'damage', 'death'],
+  PLAYER_NW: ['idle', 'walk', 'attack', 'damage', 'death'],
+  ENEMY_BASIC:   ['idle', 'walk', 'attack', 'damage', 'death'],
+  ENEMY_FAST:    ['idle', 'walk', 'attack', 'damage', 'death'],
+  ENEMY_BRUTE:   ['idle', 'walk', 'attack', 'damage', 'death'],
+  WEAPON_PISTOL: ['idle', 'fire'],
+  WEAPON_KNIFE:  ['idle', 'attack'],
+  PICKUP_AMMO:   [],
+  PICKUP_HEALTH: [],
+  PICKUP_WEAPON: [],
+};
+
+function animFrKey(n, st)  { return 'sprite_' + n + '_anim_' + st + '_frames'; }
+function animFpsKey(n, st) { return 'sprite_' + n + '_anim_' + st + '_fps'; }
+
+// === SPRITE SIZE HELPER ===
+
+function getSpriteSize(name) {
+  if (name.startsWith('PLAYER_')) return { w:22, h:22 };
+  if (name.startsWith('ENEMY_'))  return { w:20, h:20 };
+  if (name.startsWith('WEAPON_')) return { w:16, h:8  };
+  return { w:16, h:16 };
+}
+
+// === ANCHOR EDITOR (Feature 4) ===
+
+const ANCHOR_DEFAULTS = {
+  WEAPON_PISTOL: { gripX:2, gripY:4, barrelX:13, barrelY:4 },
+  WEAPON_KNIFE:  { gripX:8, gripY:14, barrelX:8,  barrelY:2 },
+};
+const ANCHOR_KEY = wn => 'weapon_' + wn + '_anchor';
+
+// === CUSTOM WEAPONS (+ Add Ranged / Melee) ===
+
+const CUSTOM_WEAPONS_KEY = 'mercs_custom_weapons';
+
+function loadCustomWeaponsList() {
+  try { return JSON.parse(localStorage.getItem(CUSTOM_WEAPONS_KEY) || '{}'); } catch(e) { return {}; }
+}
+
+function saveCustomWeaponsList(data) {
+  localStorage.setItem(CUSTOM_WEAPONS_KEY, JSON.stringify(data));
+}
+
+// Wires a new weapon name into every lookup table using the base weapon's
+// (WEAPON_PISTOL / WEAPON_KNIFE) sprite, constants schema, anims and anchors
+// as defaults — same configurables, default sprite, editable afterward.
+function registerWeapon(category, name) {
+  const isRanged = category === 'ranged';
+  const baseName = isRanged ? 'WEAPON_PISTOL' : 'WEAPON_KNIFE';
+
+  SPRITE_FNS[name] = SPRITE_FNS[baseName];
+  SPRITE_TO_CONFIG[name] = name;
+  CONSTANT_DEFAULTS[name] = Object.assign({}, CONSTANT_DEFAULTS[baseName]);
+  CONSTANT_SCHEMAS[name] = CONSTANT_SCHEMAS[baseName];
+  SPRITE_ANIM_STATES[name] = (SPRITE_ANIM_STATES[baseName] || []).slice();
+  if (ANCHOR_DEFAULTS[baseName]) ANCHOR_DEFAULTS[name] = Object.assign({}, ANCHOR_DEFAULTS[baseName]);
+
+  const groupKey = isRanged ? 'rangedWeapons' : 'meleeWeapons';
+  if (!SPRITE_GROUPS[groupKey].includes(name)) SPRITE_GROUPS[groupKey].push(name);
+  if (!BUILTIN_NAMES.includes(name)) BUILTIN_NAMES.push(name);
+}
+
+function addWeapon(category) {
+  const isRanged = category === 'ranged';
+  const promptLabel = isRanged ? 'Name this ranged weapon:' : 'Name this melee weapon:';
+  const label = prompt(promptLabel, isRanged ? 'New Ranged Weapon' : 'New Melee Weapon');
+  if (label === null) return;
+
+  const fallback = isRanged ? 'RANGED_WEAPON' : 'MELEE_WEAPON';
+  const slug = label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const baseId = 'WEAPON_' + (slug || fallback);
+  let id = baseId, n = 2;
+  while (BUILTIN_NAMES.includes(id)) { id = baseId + '_' + n; n++; }
+
+  registerWeapon(category, id);
+
+  const custom = loadCustomWeaponsList();
+  const listKey = isRanged ? 'ranged' : 'melee';
+  if (!custom[listKey]) custom[listKey] = [];
+  custom[listKey].push(id);
+  saveCustomWeaponsList(custom);
+
+  rebuildUI();
+  selectSlot(id);
+  setStatus('Added ' + id);
+}
+
+// === CUSTOM ENEMIES (+ Add) ===
+
+const CUSTOM_ENEMIES_KEY = 'mercs_custom_enemies';
+
+function loadCustomEnemiesList() {
+  try { return JSON.parse(localStorage.getItem(CUSTOM_ENEMIES_KEY) || '[]'); } catch(e) { return []; }
+}
+
+function saveCustomEnemiesList(list) {
+  localStorage.setItem(CUSTOM_ENEMIES_KEY, JSON.stringify(list));
+}
+
+// Wires a new enemy name into every lookup table using ENEMY_BASIC's sprite,
+// constants schema and anims as defaults — same configurables, default sprite,
+// editable afterward.
+function registerEnemy(name) {
+  const baseName = 'ENEMY_BASIC';
+
+  SPRITE_FNS[name] = SPRITE_FNS[baseName];
+  SPRITE_TO_CONFIG[name] = name;
+  CONSTANT_DEFAULTS[name] = Object.assign({}, CONSTANT_DEFAULTS[baseName]);
+  CONSTANT_SCHEMAS[name] = CONSTANT_SCHEMAS[baseName];
+  SPRITE_ANIM_STATES[name] = (SPRITE_ANIM_STATES[baseName] || []).slice();
+
+  if (!SPRITE_GROUPS.enemies.includes(name)) SPRITE_GROUPS.enemies.push(name);
+  if (!BUILTIN_NAMES.includes(name)) BUILTIN_NAMES.push(name);
+}
+
+function addEnemy() {
+  const label = prompt('Name this enemy:', 'New Enemy');
+  if (label === null) return;
+
+  const slug = label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const baseId = 'ENEMY_' + (slug || 'HOSTILE');
+  let id = baseId, n = 2;
+  while (BUILTIN_NAMES.includes(id)) { id = baseId + '_' + n; n++; }
+
+  registerEnemy(id);
+
+  const custom = loadCustomEnemiesList();
+  custom.push(id);
+  saveCustomEnemiesList(custom);
+
+  rebuildUI();
+  selectSlot(id);
+  setStatus('Added ' + id);
+}
+
+// === ACTIVE ENEMIES (drives which enemies can spawn in game.html) ===
+
+const ACTIVE_ENEMIES_KEY = 'mercs_active_enemies';
+
+// No saved list yet (feature never touched) implies the original always-on trio —
+// mirrors game.html's loadActiveEnemyNames() fallback so both files agree by default.
+function loadActiveEnemies() {
+  try {
+    const raw = localStorage.getItem(ACTIVE_ENEMIES_KEY);
+    if (raw === null) return ['ENEMY_BASIC', 'ENEMY_FAST', 'ENEMY_BRUTE'];
+    return JSON.parse(raw);
+  } catch(e) { return ['ENEMY_BASIC', 'ENEMY_FAST', 'ENEMY_BRUTE']; }
+}
+
+function saveActiveEnemies(list) {
+  localStorage.setItem(ACTIVE_ENEMIES_KEY, JSON.stringify(list));
+}
+
+function isEnemyActive(name) {
+  return loadActiveEnemies().includes(name);
+}
+
+function setEnemyActive(name, on) {
+  const list = loadActiveEnemies();
+  const idx = list.indexOf(name);
+  if (on && idx === -1) list.push(name);
+  if (!on && idx !== -1) list.splice(idx, 1);
+  saveActiveEnemies(list);
+}
+
+// === EQUIPPED WEAPON (drives which weapon game.html actually uses) ===
+
+function equipKey(cat) { return 'mercs_equipped_' + cat; }
+
+function weaponCategory(name) {
+  if (SPRITE_GROUPS.rangedWeapons.includes(name)) return 'ranged';
+  if (SPRITE_GROUPS.meleeWeapons.includes(name))  return 'melee';
+  return null;
+}
+
+function getEquipped(cat) {
+  const fallback = cat === 'ranged' ? 'WEAPON_PISTOL' : 'WEAPON_KNIFE';
+  return localStorage.getItem(equipKey(cat)) || fallback;
+}
+
+function setEquipped(cat, name) {
+  localStorage.setItem(equipKey(cat), name);
+  refreshEquipToggles(cat);
+}
+
+function refreshEquipToggles(cat) {
+  const names = cat === 'ranged' ? SPRITE_GROUPS.rangedWeapons : SPRITE_GROUPS.meleeWeapons;
+  const equipped = getEquipped(cat);
+  names.forEach(n => {
+    const row = document.getElementById('slot-' + n);
+    if (!row) return;
+    const cb = row.querySelector('.toggle-equip input');
+    if (cb) cb.checked = (n === equipped);
+  });
+}
+
+// A checkbox styled as a slider switch. `onToggle(checked)` fires on change;
+// `extraClass` lets callers target a specific toggle later (e.g. via querySelector).
+function makeToggle(labelText, initialChecked, onToggle, extraClass) {
+  const label = document.createElement('label');
+  label.className = 'equip-toggle' + (extraClass ? ' ' + extraClass : '');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = initialChecked;
+  cb.addEventListener('change', () => onToggle(cb.checked));
+  const slider = document.createElement('span');
+  slider.className = 'equip-slider';
+  const text = document.createElement('span');
+  text.className = 'equip-label'; text.textContent = labelText;
+  label.appendChild(cb); label.appendChild(slider); label.appendChild(text);
+  return { label, cb };
+}
+
+// === WEAPON DROP LOOT POOL (drives the "LOOT POOL" toggle + PICKUP_WEAPON drop chance) ===
+
+const LOOT_POOL_KEY = 'mercs_loot_pool';
+
+function loadLootPool() {
+  try { return JSON.parse(localStorage.getItem(LOOT_POOL_KEY) || '{}'); } catch(e) { return {}; }
+}
+
+function saveLootPool(data) {
+  localStorage.setItem(LOOT_POOL_KEY, JSON.stringify(data));
+}
+
+function isInLootPool(name) {
+  const cat = weaponCategory(name);
+  if (!cat) return false;
+  const pool = loadLootPool();
+  return (pool[cat] || []).includes(name);
+}
+
+function toggleLootPool(name, on) {
+  const cat = weaponCategory(name);
+  if (!cat) return;
+  const pool = loadLootPool();
+  if (!pool[cat]) pool[cat] = [];
+  const idx = pool[cat].indexOf(name);
+  if (on && idx === -1) pool[cat].push(name);
+  if (!on && idx !== -1) pool[cat].splice(idx, 1);
+  saveLootPool(pool);
+}
+
+function loadAnchorData(wn) {
+  try {
+    const raw = localStorage.getItem(ANCHOR_KEY(wn));
+    if (raw) return Object.assign({}, ANCHOR_DEFAULTS[wn] || {}, JSON.parse(raw));
+  } catch(e) {}
+  return Object.assign({}, ANCHOR_DEFAULTS[wn] || {});
+}
+function saveAnchorData(wn, data) {
+  localStorage.setItem(ANCHOR_KEY(wn), JSON.stringify(data));
+}
+
+function renderAnchorEditor(wn, container) {
+  const { w:SW, h:SH } = getSpriteSize(wn);
+  const SCALE = 8;
+  const CW = SW * SCALE, CH = SH * SCALE;
+  const data = loadAnchorData(wn);
+
+  // Draw sprite to offscreen then scale up
+  const offC = document.createElement('canvas');
+  offC.width = SW; offC.height = SH;
+  if (SPRITE_FNS[wn]) SPRITE_FNS[wn](offC.getContext('2d'), SW, SH);
+  const customUrl = localStorage.getItem('sprite_' + wn);
+  if (customUrl) {
+    const img = new Image();
+    img.onload = () => { offC.getContext('2d').clearRect(0,0,SW,SH); offC.getContext('2d').drawImage(img,0,0,SW,SH); redrawAnchorCanvas(); };
+    img.src = customUrl;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'anchor-wrap';
+  wrap.style.width = CW + 'px'; wrap.style.height = CH + 'px';
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'anchor-canvas';
+  canvas.width = CW; canvas.height = CH;
+  wrap.appendChild(canvas);
+
+  function redrawAnchorCanvas() {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0,CW,CH);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(offC, 0, 0, CW, CH);
+  }
+  redrawAnchorCanvas();
+
+  // Handles
+  function makeHandle(cls, px, py) {
+    const h = document.createElement('div');
+    h.className = 'anchor-handle ' + cls;
+    h.style.left = (px * SCALE + SCALE/2) + 'px';
+    h.style.top  = (py * SCALE + SCALE/2) + 'px';
+    return h;
+  }
+
+  const gripH   = makeHandle('anchor-grip',   data.gripX,   data.gripY);
+  const barrelH = makeHandle('anchor-barrel', data.barrelX, data.barrelY);
+  wrap.appendChild(gripH);
+  wrap.appendChild(barrelH);
+
+  const coordsEl = document.createElement('div');
+  coordsEl.className = 'anchor-coords';
+
+  function updateCoords() {
+    coordsEl.innerHTML =
+      `grip: x=${data.gripX} y=${data.gripY}<br>barrel: x=${data.barrelX} y=${data.barrelY}`;
+  }
+  updateCoords();
+
+  function bindDrag(handle, xKey, yKey) {
+    handle.addEventListener('mousedown', e => {
+      e.preventDefault(); e.stopPropagation();
+      handle.style.cursor = 'grabbing';
+      const onMove = ev => {
+        const rect = wrap.getBoundingClientRect();
+        const rx = ev.clientX - rect.left;
+        const ry = ev.clientY - rect.top;
+        const px = Math.max(0, Math.min(SW-1, Math.round(rx / SCALE - 0.5)));
+        const py = Math.max(0, Math.min(SH-1, Math.round(ry / SCALE - 0.5)));
+        data[xKey] = px; data[yKey] = py;
+        handle.style.left = (px * SCALE + SCALE/2) + 'px';
+        handle.style.top  = (py * SCALE + SCALE/2) + 'px';
+        saveAnchorData(wn, data);
+        updateCoords();
+      };
+      const onUp = () => {
+        handle.style.cursor = 'grab';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+  bindDrag(gripH,   'gripX',   'gripY');
+  bindDrag(barrelH, 'barrelX', 'barrelY');
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:10px;color:var(--text-dim);letter-spacing:1px;margin-bottom:6px;';
+  title.textContent = 'ANCHOR POINTS';
+
+  container.appendChild(title);
+  container.appendChild(wrap);
+  container.appendChild(coordsEl);
+
+  const sep = document.createElement('div');
+  sep.style.cssText = 'border-bottom:1px solid var(--border);margin:8px 0;';
+  container.appendChild(sep);
+}
+
+// === COMPASS ROSE (Feature 3) ===
+
+let compassSelected = 'PLAYER_S';
+const COMPASS_LAYOUT = [
+  ['PLAYER_NW','PLAYER_N', 'PLAYER_NE'],
+  ['PLAYER_W',  null,      'PLAYER_E' ],
+  ['PLAYER_SW','PLAYER_S', 'PLAYER_SE'],
+];
+
+function buildCompassRose(container) {
+  const wrap = document.createElement('div');
+
+  // Grid
+  const grid = document.createElement('div');
+  grid.className = 'compass-rose';
+
+  COMPASS_LAYOUT.forEach(row => {
+    row.forEach(name => {
+      const cell = document.createElement('div');
+      if (!name) {
+        cell.className = 'compass-cell compass-center';
+        // Silhouette
+        const sil = document.createElement('canvas');
+        sil.width = 40; sil.height = 40;
+        const sc = sil.getContext('2d');
+        sc.fillStyle = '#2a2840';
+        sc.beginPath(); sc.arc(20,22,12,0,Math.PI*2); sc.fill();
+        sc.beginPath(); sc.arc(20,10,6,0,Math.PI*2); sc.fill();
+        cell.appendChild(sil);
+      } else {
+        cell.className = 'compass-cell' + (isCustom(name) ? ' has-custom' : '') + (name === compassSelected ? ' active' : '');
+        cell.id = 'compass-cell-' + name;
+
+        const cv = document.createElement('canvas');
+        cv.width = 64; cv.height = 64;
+        cv.id = 'preview-canvas-' + name;
+        cell.appendChild(cv);
+
+        const lbl = document.createElement('div');
+        lbl.className = 'dir-label';
+        lbl.textContent = name.replace('PLAYER_', '');
+        cell.appendChild(lbl);
+
+        cell.onclick = () => selectSlot(name);
+        grid.appendChild(cell);
+        updateSlotPreview(name);
+        return;
+      }
+      grid.appendChild(cell);
+    });
+  });
+  wrap.appendChild(grid);
+
+  // Detail section
+  const detail = document.createElement('div');
+  detail.className = 'compass-detail';
+  detail.id = 'compass-detail';
+  wrap.appendChild(detail);
+
+  // Button row
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'btn';
+  copyBtn.style.cssText = 'font-size:11px;';
+  copyBtn.textContent = '[ ↓ Copy to all directions ]';
+  copyBtn.onclick = copyToAllDirections;
+  btnRow.appendChild(copyBtn);
+
+  const genBtn = document.createElement('button');
+  genBtn.className = 'btn primary';
+  genBtn.style.cssText = 'font-size:11px;';
+  genBtn.textContent = '[ ⚡ Generate Character ]';
+  genBtn.onclick = openGenerator;
+  btnRow.appendChild(genBtn);
+
+  wrap.appendChild(btnRow);
+
+  container.appendChild(wrap);
+  updateCompassDetail();
+}
+
+function updateCompassDetail() {
+  const detail = document.getElementById('compass-detail');
+  if (!detail) return;
+  const name = compassSelected;
+  const custom = isCustom(name);
+
+  detail.innerHTML = '';
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'cd-name';
+  nameEl.textContent = name;
+  detail.appendChild(nameEl);
+
+  const statusEl = document.createElement('div');
+  statusEl.style.cssText = 'font-size:11px;margin-bottom:8px;';
+  statusEl.style.color = custom ? 'var(--green)' : 'var(--text-dim)';
+  statusEl.textContent = custom ? '● CUSTOM' : '○ DEFAULT';
+  detail.appendChild(statusEl);
+
+  const actions = document.createElement('div');
+  actions.className = 'cd-actions';
+
+  const upBtn = document.createElement('button');
+  upBtn.className = 'btn'; upBtn.textContent = '[ Upload ]';
+  upBtn.onclick = () => triggerUpload(name, false);
+
+  const clrBtn = document.createElement('button');
+  clrBtn.className = 'btn danger'; clrBtn.textContent = '[ Clear ]';
+  clrBtn.onclick = () => { clearSlot(name); updateCompassDetail(); };
+
+  actions.appendChild(upBtn);
+  actions.appendChild(clrBtn);
+  detail.appendChild(actions);
+}
+
+function copyToAllDirections() {
+  const src = compassSelected;
+  const url = localStorage.getItem('sprite_' + src);
+  if (!url) { setStatus('No base sprite on ' + src + ' to copy'); return; }
+  SPRITE_GROUPS.characters.forEach(name => {
+    if (name === src) return;
+    localStorage.setItem('sprite_' + name, url);
+    localStorage.removeItem('sprite_' + name + '_frames');
+    delete slotState[name];
+    updateSlotPreview(name);
+  });
+  setStatus('Copied ' + src.replace('PLAYER_','') + ' sprite to all 8 directions');
+}
+
+
+// === SLOT DOM BUILDERS ===
+
+function buildSlotRow(name, container) {
+  const div = document.createElement('div');
+  div.className = 'slot-row' + (isCustom(name) ? ' has-custom' : '');
+  div.id = 'slot-' + name;
+
+  // Click to select + show constants
+  div.addEventListener('click', e => {
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+    selectSlot(name);
+  });
+
+  // Preview canvas
+  const previewWrap = document.createElement('div');
+  previewWrap.className = 'slot-preview';
+  const previewCanvas = document.createElement('canvas');
+  previewCanvas.width = 64; previewCanvas.height = 64;
+  previewCanvas.id = 'preview-canvas-' + name;
+  previewWrap.appendChild(previewCanvas);
+  const animBadge = document.createElement('div');
+  animBadge.className = 'anim-badge'; animBadge.id = 'anim-badge-' + name;
+  previewWrap.appendChild(animBadge);
+
+  // Info
+  const info = document.createElement('div');
+  info.className = 'slot-info';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'slot-name'; nameEl.textContent = name;
+  const statusEl = document.createElement('div');
+  statusEl.className = 'slot-status' + (isCustom(name) ? ' custom' : '');
+  statusEl.id = 'status-' + name;
+  statusEl.textContent = isCustom(name) ? '● CUSTOM' : '○ DEFAULT';
+  info.appendChild(nameEl); info.appendChild(statusEl);
+
+  // Actions
+  const actions = document.createElement('div');
+  actions.className = 'slot-actions';
+
+  const uploadBtn = document.createElement('button');
+  uploadBtn.className = 'btn'; uploadBtn.textContent = '[ Upload ]';
+  uploadBtn.onclick = () => triggerUpload(name, false);
+
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'btn danger'; clearBtn.textContent = '[ Clear ]';
+  clearBtn.onclick = () => clearSlot(name);
+
+  actions.appendChild(uploadBtn); actions.appendChild(clearBtn);
+
+  // Equip / loot pool toggles — only ranged/melee weapons can be worn or dropped
+  const cat = weaponCategory(name);
+  if (cat) {
+    const equipToggle = makeToggle('EQUIP', getEquipped(cat) === name, checked => {
+      if (checked) {
+        setEquipped(cat, name);
+        setStatus('Equipped ' + name + ' — reload game to take effect');
+      } else {
+        equipToggle.cb.checked = true; // exactly one weapon per category must stay equipped
+      }
+    }, 'toggle-equip');
+    equipToggle.label.title = 'Equip this weapon on the character';
+    actions.appendChild(equipToggle.label);
+
+    const lootToggle = makeToggle('LOOT POOL', isInLootPool(name), checked => {
+      toggleLootPool(name, checked);
+      setStatus((checked ? 'Added ' : 'Removed ') + name + (checked ? ' to' : ' from') + ' the weapon drop loot pool');
+    }, 'toggle-loot');
+    lootToggle.label.title = 'Let this weapon drop from enemies as a pickup';
+    actions.appendChild(lootToggle.label);
+  }
+
+  // Active toggle — only enemies can spawn in the game
+  if (SPRITE_GROUPS.enemies.includes(name)) {
+    const activeToggle = makeToggle('ACTIVE', isEnemyActive(name), checked => {
+      setEnemyActive(name, checked);
+      setStatus((checked ? 'Activated ' : 'Deactivated ') + name + ' — reload game to take effect');
+    }, 'toggle-active');
+    activeToggle.label.title = 'Let this enemy spawn in the game';
+    actions.appendChild(activeToggle.label);
+  }
+
+  div.appendChild(previewWrap); div.appendChild(info); div.appendChild(actions);
+  container.appendChild(div);
+
+  updateSlotPreview(name);
+}
+
+// === CONSTANTS PANEL ===
+
+function selectSlot(name) {
+  currentSpriteName = name;
+  // Compass-based character selection
+  if (name.startsWith('PLAYER_')) {
+    document.querySelectorAll('.compass-cell').forEach(c => c.classList.remove('active'));
+    const cell = document.getElementById('compass-cell-' + name);
+    if (cell) cell.classList.add('active');
+    compassSelected = name;
+    updateCompassDetail();
+    renderConstantsPanel(name);
+    return;
+  }
+  // Remove selected from old
+  if (selectedSlot) {
+    const old = document.getElementById('slot-' + selectedSlot);
+    if (old) old.classList.remove('selected');
+  }
+  selectedSlot = name;
+  const el = document.getElementById('slot-' + name);
+  if (el) el.classList.add('selected');
+  renderConstantsPanel(name);
+}
+
+function renderConstantsPanel(name) {
+  const panel = document.getElementById('constants-panel');
+  const configKey = SPRITE_TO_CONFIG[name] || null;
+  const schema = configKey ? (CONSTANT_SCHEMAS[configKey] || []) : [];
+
+  if (!configKey || schema.length === 0) {
+    panel.innerHTML = `<div class="const-title">${name}</div><div class="const-empty">No configurable constants<br>for this sprite.</div>`;
+    return;
+  }
+
+  const saved  = loadSavedConstants();
+  const merged = Object.assign({}, CONSTANT_DEFAULTS[configKey], saved[configKey] || {});
+
+  const isWeapon = name.startsWith('WEAPON_');
+  let html = `<div class="const-title">${name}</div>`;
+  if (isWeapon && ANCHOR_DEFAULTS[name]) html += `<div id="anchor-editor-${name}" style="margin-bottom:12px;"></div>`;
+  schema.forEach(f => {
+    const v = merged[f.key] !== undefined ? merged[f.key] : CONSTANT_DEFAULTS[configKey][f.key];
+    if (f.type === 'select') {
+      const opts = f.options.map(o =>
+        `<option value="${o}"${o === v ? ' selected' : ''}>${o.toUpperCase()}</option>`
+      ).join('');
+      html += `
+      <div class="const-field">
+        <div class="const-label"><span>${f.label}</span></div>
+        <div class="const-row">
+          <select id="cni-${name}-${f.key}" onchange="syncConst('${name}','${f.key}',this.value,'')"
+                  style="flex:1;background:var(--surface);border:1px solid var(--border2);color:var(--amber);font-family:var(--mono);font-size:12px;padding:3px 6px;cursor:pointer;">
+            ${opts}
+          </select>
+        </div>
+      </div>`;
+    } else {
+      const unitStr = f.unit ? ` <span style="color:var(--text-dim)">${f.unit}</span>` : '';
+      html += `
+      <div class="const-field">
+        <div class="const-label"><span>${f.label}</span><span class="cv" id="cv-${name}-${f.key}">${v}${unitStr}</span></div>
+        <div class="const-row">
+          <input type="range"  id="csl-${name}-${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${v}"
+                 oninput="syncConst('${name}','${f.key}',this.value,'${f.unit}')">
+          <input type="number" id="cni-${name}-${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${v}"
+                 oninput="syncConst('${name}','${f.key}',this.value,'${f.unit}')">
+        </div>
+      </div>`;
+    }
+  });
+
+  html += `<div class="const-btns">
+    <button class="btn primary" onclick="applyConstants('${name}')">[ Apply to Game ]</button>
+    <button class="btn danger"  onclick="resetConstants('${name}')">[ Reset ]</button>
+  </div>`;
+
+  panel.innerHTML = html;
+  if (isWeapon && ANCHOR_DEFAULTS[name]) {
+    renderAnchorEditor(name, document.getElementById('anchor-editor-' + name));
+  }
+}
+
+function syncConst(name, key, rawVal, unit) {
+  const configKey = SPRITE_TO_CONFIG[name];
+  const schema = CONSTANT_SCHEMAS[configKey].find(f => f.key === key);
+  if (schema.type === 'select') {
+    const sel = document.getElementById('cni-' + name + '-' + key);
+    if (sel) sel.value = rawVal;
+    return;
+  }
+  const v = Math.max(schema.min, Math.min(schema.max, parseFloat(rawVal) || 0));
+  const sl  = document.getElementById('csl-' + name + '-' + key);
+  const ni  = document.getElementById('cni-' + name + '-' + key);
+  const cv  = document.getElementById('cv-'  + name + '-' + key);
+  if (sl) sl.value = v;
+  if (ni) ni.value = v;
+  const unitStr = unit ? ` <span style="color:var(--text-dim)">${unit}</span>` : '';
+  if (cv) cv.innerHTML = v + unitStr;
+}
+
+function applyConstants(name) {
+  const configKey = SPRITE_TO_CONFIG[name];
+  if (!configKey) return;
+  const schema = CONSTANT_SCHEMAS[configKey];
+  const saved  = loadSavedConstants();
+  if (!saved[configKey]) saved[configKey] = {};
+  schema.forEach(f => {
+    const ni = document.getElementById('cni-' + name + '-' + f.key);
+    if (ni) saved[configKey][f.key] = f.type === 'select' ? ni.value : parseFloat(ni.value);
+  });
+  saveMercsConstants(saved);
+  setStatus('Constants applied — reload game to take effect');
+}
+
+function resetConstants(name) {
+  const configKey = SPRITE_TO_CONFIG[name];
+  if (!configKey) return;
+  const saved = loadSavedConstants();
+  delete saved[configKey];
+  saveMercsConstants(saved);
+  renderConstantsPanel(name);
+  setStatus('Reset ' + name + ' to defaults');
+}
+
+// === PREVIEW RENDERING ===
+
+function drawSpriteToCanvas(name, canvas) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const s = getSlotData(name);
+  const W = canvas.width, H = canvas.height;
+
+  if (s.isAnim && s.frames.length > 0) {
+    const frame = s.frames[s.animFrame % s.frames.length];
+    if (frame && frame.complete && frame.naturalWidth > 0) {
+      ctx.drawImage(frame, 0, 0, W, H);
+    }
+  } else if (s.image && s.image.complete && s.image.naturalWidth > 0) {
+    ctx.drawImage(s.image, 0, 0, W, H);
+  } else if (SPRITE_FNS[name]) {
+    SPRITE_FNS[name](ctx, W, H);
+  } else {
+    ctx.fillStyle = '#2a2840';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('?', W/2, H/2 + 4);
+    ctx.textAlign = 'left';
+  }
+}
+
+function updateSlotPreview(name) {
+  const canvas = document.getElementById('preview-canvas-' + name);
+  if (canvas) drawSpriteToCanvas(name, canvas);
+
+  const statusEl = document.getElementById('status-' + name);
+  if (statusEl) {
+    const c = isCustom(name);
+    statusEl.textContent = c ? '● CUSTOM' : '○ DEFAULT';
+    statusEl.className = 'slot-status' + (c ? ' custom' : '');
+  }
+
+  const row = document.getElementById('slot-' + name);
+  if (row) row.className = 'slot-row' + (isCustom(name) ? ' has-custom' : '');
+
+  const badge = document.getElementById('anim-badge-' + name);
+  if (badge) {
+    const s = getSlotData(name);
+    badge.textContent = s.isAnim ? s.frames.length + 'f' : '';
+  }
+
+  updateStats();
+}
+
+// Animation ticker
+setInterval(() => {
+  const all = [...BUILTIN_NAMES];
+  all.forEach(name => {
+    const s = slotState[name];
+    if (!s || !s.isAnim || s.frames.length === 0) return;
+    s.animTimer++;
+    if (s.animTimer >= Math.round(60 / (s.fps || 12))) {
+      s.animTimer = 0;
+      s.animFrame = (s.animFrame + 1) % s.frames.length;
+      updateSlotPreview(name);
+    }
+  });
+  updateLivePreview();
+}, 1000/60);
+
+// === LIVE PREVIEW ===
+
+function updateLivePreview() {
+  const canvas = document.getElementById('live-preview-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0d0b12';
+  ctx.fillRect(0, 0, 248, 248);
+  ctx.imageSmoothingEnabled = false;
+
+  const name = currentSpriteName;
+  const { w, h } = getSpriteSize(name);
+  const scale = Math.min((248-16)/w, (248-16)/h);
+  const dw = w*scale, dh = h*scale;
+  const dx = (248-dw)/2, dy = (248-dh)/2;
+
+  const tmpC = document.createElement('canvas');
+  tmpC.width = w; tmpC.height = h;
+  drawSpriteToCanvas(name, tmpC);
+  ctx.drawImage(tmpC, dx, dy, dw, dh);
+
+  const label = document.getElementById('preview-label');
+  label.textContent = name + '  ' + w + '×' + h + (isCustom(name) ? '  ● CUSTOM' : '  ○ DEFAULT');
+}
+
+// === UPLOAD ===
+
+const uploadCallbacks = {}; // name → { multi:bool }
+const fileInput = document.createElement('input');
+fileInput.type = 'file'; fileInput.style.display = 'none';
+fileInput.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
+document.body.appendChild(fileInput);
+
+function triggerUpload(name, multi) {
+  fileInput.multiple = multi;
+  uploadCallbacks._pending = { name, multi };
+  fileInput.value = '';
+  fileInput.click();
+}
+
+fileInput.addEventListener('change', () => {
+  const { name, multi } = uploadCallbacks._pending || {};
+  if (!name || fileInput.files.length === 0) return;
+
+  const files = Array.from(fileInput.files);
+  if (files.length === 1 && !multi) {
+    // Single image
+    const reader = new FileReader();
+    reader.onload = e => {
+      const s = getSlotData(name);
+      localStorage.setItem('sprite_' + name, e.target.result);
+      localStorage.removeItem('sprite_' + name + '_frames');
+      const img = new Image();
+      img.onload = () => { updateSlotPreview(name); updateLivePreview(); setStatus('Uploaded to ' + name); };
+      img.src = e.target.result;
+      s.image = img; s.isAnim = false; s.frames = [];
+    };
+    reader.readAsDataURL(files[0]);
+  } else {
+    // Multiple → animation frames
+    const s = getSlotData(name);
+    const pending = [];
+    let done = 0;
+    files.forEach((file, i) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        pending[i] = e.target.result;
+        done++;
+        if (done === files.length) {
+          // Merge with existing frames if adding
+          const existingRaw = localStorage.getItem('sprite_' + name + '_frames');
+          let existing = [];
+          if (existingRaw) { try { existing = JSON.parse(existingRaw); } catch(e) {} }
+          const allUrls = multi ? [...existing, ...pending.filter(Boolean)] : pending.filter(Boolean);
+          localStorage.setItem('sprite_' + name + '_frames', JSON.stringify(allUrls));
+          localStorage.setItem('sprite_' + name + '_fps', s.fps || 12);
+          localStorage.removeItem('sprite_' + name);
+          s.frames = allUrls.map(url => { const img = new Image(); img.src = url; return img; });
+          s.isAnim = true; s.image = null;
+          updateSlotPreview(name);
+          updateLivePreview();
+          setStatus('Added ' + files.length + ' frame(s) to ' + name);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+});
+
+// Drop zone per slot (bind to preview canvas)
+function bindDropZone(name) {
+  const canvas = document.getElementById('preview-canvas-' + name);
+  if (!canvas) return;
+  canvas.addEventListener('dragover', e => { e.preventDefault(); canvas.style.outline='2px solid #3ef83e'; });
+  canvas.addEventListener('dragleave', () => { canvas.style.outline=''; });
+  canvas.addEventListener('drop', e => {
+    e.preventDefault(); canvas.style.outline='';
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      localStorage.setItem('sprite_' + name, ev.target.result);
+      localStorage.removeItem('sprite_' + name + '_frames');
+      const s = getSlotData(name);
+      const img = new Image();
+      img.onload = () => { updateSlotPreview(name); updateLivePreview(); setStatus('Dropped to ' + name); };
+      img.src = ev.target.result;
+      s.image = img; s.isAnim = false; s.frames = [];
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// === CLEAR / RESET ===
+
+function clearSlot(name) {
+  localStorage.removeItem('sprite_' + name);
+  localStorage.removeItem('sprite_' + name + '_frames');
+  localStorage.removeItem('sprite_' + name + '_fps');
+  (SPRITE_ANIM_STATES[name] || []).forEach(st => {
+    localStorage.removeItem(animFrKey(name, st));
+    localStorage.removeItem(animFpsKey(name, st));
+  });
+  const s = getSlotData(name);
+  s.image = null; s.isAnim = false; s.frames = []; s.animFrame = 0;
+  updateSlotPreview(name);
+  updateLivePreview();
+  setStatus('Cleared ' + name);
+}
+
+document.getElementById('btn-clear-all').onclick = () => {
+  if (!confirm('Clear ALL sprite data? This cannot be undone.')) return;
+  BUILTIN_NAMES.forEach(name => {
+    localStorage.removeItem('sprite_' + name);
+    localStorage.removeItem('sprite_' + name + '_frames');
+    localStorage.removeItem('sprite_' + name + '_fps');
+    (SPRITE_ANIM_STATES[name] || []).forEach(st => {
+      localStorage.removeItem(animFrKey(name, st));
+      localStorage.removeItem(animFpsKey(name, st));
+    });
+    const s = getSlotData(name);
+    s.image=null; s.isAnim=false; s.frames=[]; s.animFrame=0;
+    updateSlotPreview(name);
+  });
+  updateLivePreview();
+  setStatus('All sprites cleared');
+};
+
+
+// === STATS ===
+
+function updateStats() {
+  const allNames = BUILTIN_NAMES;
+  document.getElementById('stat-slots').textContent = allNames.length;
+  document.getElementById('stat-custom').textContent = allNames.filter(isCustom).length;
+
+  let bytes = 0;
+  for (let i=0; i<localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('sprite_')) bytes += (localStorage.getItem(k)||'').length;
+  }
+  document.getElementById('stat-storage').textContent = (bytes/1024).toFixed(1) + ' KB';
+
+  // Storage info panel
+  const info = document.getElementById('storage-info');
+  const used = bytes;
+  const maxK = 5 * 1024 * 1024;
+  const pct  = Math.min(100, (used / maxK) * 100).toFixed(1);
+  info.innerHTML = `
+    <div>used: <span style="color:var(--green)">${(used/1024).toFixed(1)} KB</span></div>
+    <div>limit: <span style="color:var(--text-dim)">~5,000 KB</span></div>
+    <div>capacity: <span style="color:${pct>80?'var(--red)':pct>50?'var(--amber)':'var(--green)'}">${pct}%</span></div>
+  `;
+}
+
+function setStatus(msg) {
+  const el = document.getElementById('stat-msg');
+  el.textContent = '// ' + msg;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+// === CHARACTER GENERATOR ===
+
+const GEN_PRESETS = {
+  soldier: { outfitStyle:'vest',   helmet:true,  backpack:false, skin:'#c8956c', hairStyle:'short', hairColor:'#2a1a0a', build:1, primary:'#3a5a8a', accent:'#2a3a5a', pants:'#3a3a3a', boots:'#1a1a1a', belt:true  },
+  scout:   { outfitStyle:'hoodie', helmet:false, backpack:true,  skin:'#f0d8b0', hairStyle:'pony',  hairColor:'#2a1a0a', build:0, primary:'#3a5a8a', accent:'#2a3a5a', pants:'#3a3a3a', boots:'#1a1a1a', belt:true  },
+  heavy:   { outfitStyle:'armor',  helmet:true,  backpack:false, skin:'#a06a40', hairStyle:'none',  hairColor:'#2a1a0a', build:2, primary:'#3a5a8a', accent:'#2a3a5a', pants:'#3a3a3a', boots:'#1a1a1a', belt:true  },
+};
+
+let genCompassSelected = 'S';
+let genResolution = 22;
+
+function openGenerator() {
+  const ov = document.getElementById('gen-overlay');
+  if (!ov) return;
+  ov.classList.add('open');
+  renderGenPreview();
+}
+
+function closeGenerator() {
+  const ov = document.getElementById('gen-overlay');
+  if (ov) ov.classList.remove('open');
+}
+
+function getGenState() {
+  const buildVal = parseInt(document.getElementById('gen-build')?.value ?? '1');
+  const builds = ['slim','average','bulky'];
+  const lbl = document.getElementById('gen-build-lbl');
+  if (lbl) lbl.textContent = builds[Math.min(2, buildVal)] || 'average';
+  return {
+    build:       buildVal,
+    skin:        document.getElementById('gen-skin')?.value         || '#c8956c',
+    hairStyle:   document.getElementById('gen-hair-style')?.value   || 'short',
+    hairColor:   document.getElementById('gen-hair-color')?.value   || '#2a1a0a',
+    outfitStyle: document.getElementById('gen-outfit-style')?.value || 'vest',
+    primary:     document.getElementById('gen-primary')?.value      || '#3a5a8a',
+    accent:      document.getElementById('gen-accent')?.value       || '#2a3a5a',
+    pants:       document.getElementById('gen-pants')?.value        || '#3a3a3a',
+    boots:       document.getElementById('gen-boots')?.value        || '#1a1a1a',
+    helmet:      !!(document.getElementById('gen-helmet')?.checked),
+    backpack:    !!(document.getElementById('gen-backpack')?.checked),
+    belt:        document.getElementById('gen-belt') ? !!(document.getElementById('gen-belt').checked) : true,
+  };
+}
+
+function genDrawCharacter(ctx, w, h, dir, state) {
+  // RPG-style 3/4 view: head at top, torso in middle, legs at bottom.
+  // Direction controls head offset, face visibility, and arm/leg layout.
+  const sf = w / 22;
+  const fill = (col, x, y, bw, bh) => {
+    ctx.fillStyle = col;
+    ctx.fillRect(Math.round(x*sf), Math.round(y*sf), Math.max(1,Math.round(bw*sf)), Math.max(1,Math.round(bh*sf)));
+  };
+  const oval = (col, ecx, ecy, rx, ry) => {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.ellipse(Math.round(ecx*sf), Math.round(ecy*sf), Math.max(1,Math.round(rx*sf)), Math.max(1,Math.round(ry*sf)), 0,0,Math.PI*2);
+    ctx.fill();
+  };
+
+  const toRight = ['E','SE','NE'].includes(dir);
+  const front   = ['S','SE','SW'].includes(dir);
+  const back    = ['N','NE','NW'].includes(dir);
+  const side    = dir === 'E' || dir === 'W';
+  const diagF   = dir === 'SE' || dir === 'SW';
+  const diagB   = dir === 'NE' || dir === 'NW';
+
+  const build = Math.max(0, Math.min(2, state.build || 1));
+  const bw  = 7 + build;          // body width: 7, 8, or 9
+  const scx = 11;                  // sprite horizontal center
+  const bl  = Math.floor(scx - bw / 2);
+  const br  = bl + bw;
+
+  // Head: slightly offset toward facing direction
+  const HCY = 4.5;
+  const HRX = side ? 3 : 3.5;
+  const HRY = 3.5;
+  const HCX = side        ? (toRight ? scx+1   : scx-1)
+            : (diagF||diagB) ? (toRight ? scx+0.5 : scx-0.5)
+            : scx;
+
+  const BT=9, BH=6, BB=15;   // body top, height, bottom Y
+  const AW=2, AH=5;           // arm width and height
+
+  // Leg layout: split legs for front/back/diagonal, merged for side
+  const LT=BB, LH=5, BH2=2;
+  const LG  = side ? 0 : 2;
+  const LLW = Math.floor((bw-LG)/2);
+  const RLW = bw-LG-LLW;
+  const RLX = bl+LLW+LG;
+
+  // ── 1. LEGS ──────────────────────────────────────────────────
+  if (side) {
+    fill(state.pants, bl,  LT,         bw, LH-BH2);
+    fill(state.boots, bl,  LT+LH-BH2, bw, BH2);
+  } else {
+    fill(state.pants, bl,  LT,         LLW, LH-BH2);
+    fill(state.pants, RLX, LT,         RLW, LH-BH2);
+    fill(state.boots, bl,  LT+LH-BH2, LLW, BH2);
+    fill(state.boots, RLX, LT+LH-BH2, RLW, BH2);
+  }
+
+  // ── 1b. BACKPACK side view: behind everything ─────────────────
+  if (state.backpack && side) {
+    const bpx = toRight ? bl-2.5 : br+0.5;
+    fill('#5a4830', bpx,     BT+0.5, 2.5, BH*0.8);
+    fill('#8a6840', bpx+0.5, BT+1,   1.5, BH*0.6);
+  }
+
+  // ── 2. BACK ARM ──────────────────────────────────────────────
+  if (side) {
+    const bax = toRight ? bl-AW : br;
+    fill(state.primary, bax, BT+1, AW, 3);
+    fill(state.skin,    bax, BT+4, AW, AH-4);
+  } else {
+    fill(state.primary, bl-AW, BT,   AW, 3);
+    fill(state.skin,    bl-AW, BT+3, AW, AH-3);
+    fill(state.primary, br,    BT,   AW, 3);
+    fill(state.skin,    br,    BT+3, AW, AH-3);
+  }
+
+  // ── 3. TORSO ─────────────────────────────────────────────────
+  fill(state.primary, bl, BT, bw, BH);
+  const mx = bl + bw/2;
+  if (state.outfitStyle === 'vest') {
+    fill(state.accent,  bl,   BT,     bw,   1.5);
+    fill(state.accent,  bl+1, BT,     1,    BH);
+    fill(state.accent,  br-2, BT,     1,    BH);
+    fill(state.primary, bl+2, BT+1.5, bw-4, BH-1.5);
+  } else if (state.outfitStyle === 'jacket') {
+    fill(state.accent, bl,     BT,     bw, 1.5);
+    fill(state.accent, mx-0.5, BT+1.5, 1,  BH-1.5);
+  } else if (state.outfitStyle === 'hoodie') {
+    fill(state.accent, bl,   BT, bw, 2.5);
+    fill(state.accent, bl,   BT, 1,  BH);
+    fill(state.accent, br-1, BT, 1,  BH);
+  } else if (state.outfitStyle === 'armor') {
+    fill(state.accent, bl,   BT,                  bw,   1);
+    fill(state.accent, bl,   BT,                  1,    BH);
+    fill(state.accent, br-1, BT,                  1,    BH);
+    fill(state.accent, bl+1, BT+Math.floor(BH/2), bw-2, 1);
+  }
+  if (state.belt) {
+    fill('#5a4830', bl, BB-1.5, bw, 1.5);
+    if (w >= 32) fill('#c8a840', mx-1, BB-1.5, 2, 1.5);
+  }
+
+  // ── 3b. BACKPACK back view: over body; front view: straps ────
+  if (state.backpack) {
+    if (back) {
+      fill('#5a4830', bl-0.5, BT+0.5, bw+1, BH*0.85);
+      fill('#8a6840', bl,     BT+1,   bw,   BH*0.65);
+    } else if (front) {
+      fill('#5a4830', bl+1, BT, 1, BH);
+      fill('#5a4830', br-2, BT, 1, BH);
+    }
+  }
+
+  // ── 4. FRONT ARM (side view only) ────────────────────────────
+  if (side) {
+    const fax = toRight ? br : bl-AW;
+    fill(state.primary, fax, BT,   AW, 3);
+    fill(state.skin,    fax, BT+3, AW, AH-3);
+  }
+
+  // ── 5. NECK ──────────────────────────────────────────────────
+  if (front || side || diagF) {
+    fill(state.helmet ? '#3a3a3a' : state.skin, HCX-1, BT-2, 2, 2);
+  }
+
+  // ── 6. HEAD ──────────────────────────────────────────────────
+  if (state.helmet) {
+    oval('#555555', HCX, HCY, HRX+0.5, HRY+0.5);
+    if (front || side || diagF) fill('#2a2a3a', HCX-2, HCY+0.5, 4, 1.5);
+  } else {
+    oval(state.skin, HCX, HCY, HRX, HRY);
+
+    // hair (always drawn — visible from all angles)
+    if (state.hairStyle === 'short') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+    } else if (state.hairStyle === 'long') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+      fill(state.hairColor, HCX-HRX+0.5, HCY+HRY*0.4, HRX*2-1, 4);
+    } else if (state.hairStyle === 'mohawk') {
+      fill(state.hairColor, HCX-0.5, HCY-HRY-2.5, 1.5, HRY+2);
+    } else if (state.hairStyle === 'buzz') {
+      oval(state.hairColor, HCX, HCY-HRY*0.2, HRX, HRY*0.5);
+    } else if (state.hairStyle === 'pony') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+      const ptX = back ? HCX-HRX+0.5 : HCX+HRX-1.5;
+      fill(state.hairColor, ptX-0.5, HCY-0.5, 1.5, 6);
+    }
+
+    // face features: front = two full eyes; diagF = 3/4 two eyes; side = profile one eye
+    if (front) {
+      fill('#1a1a2a', HCX-2.5, HCY+0.5, 1.5, 1.5);
+      fill('#1a1a2a', HCX+1,   HCY+0.5, 1.5, 1.5);
+      if (w >= 32) {
+        fill(state.hairColor, HCX-2.5, HCY-0.5, 1.5, 1);
+        fill(state.hairColor, HCX+1,   HCY-0.5, 1.5, 1);
+        fill('#8a4040', HCX-1, HCY+2.5, 2, 0.8);
+      }
+    } else if (diagF) {
+      fill('#1a1a2a', HCX-2,   HCY+0.5, 1.5, 1.5);
+      fill('#1a1a2a', HCX+0.5, HCY+0.5, 1,   1);
+      if (w >= 32) fill(state.hairColor, HCX-2, HCY-0.5, 1.5, 1);
+    } else if (side) {
+      const ex = toRight ? HCX+1.5 : HCX-3;
+      fill('#1a1a2a', ex, HCY+0.5, 1.5, 1.5);
+      if (w >= 32) {
+        fill(state.hairColor, ex, HCY-0.5, 1.5, 1);
+        fill(state.skin, toRight ? HCX+HRX-0.5 : HCX-HRX-0.5, HCY+1.5, 1, 1);
+      }
+    }
+    // back / diagB: no face features, just hair cap visible
+  }
+}
+
+function renderGenPreview() {
+  const state = getGenState();
+  ['N','NE','E','SE','S','SW','W','NW'].forEach(dir => {
+    const cv = document.getElementById('gen-cv-' + dir);
+    if (!cv) return;
+    const off = document.createElement('canvas');
+    off.width = genResolution; off.height = genResolution;
+    genDrawCharacter(off.getContext('2d'), genResolution, genResolution, dir, state);
+    const dctx = cv.getContext('2d');
+    dctx.imageSmoothingEnabled = false;
+    dctx.clearRect(0, 0, cv.width, cv.height);
+    dctx.drawImage(off, 0, 0, cv.width, cv.height);
+  });
+  const dcanvas = document.getElementById('gen-detail-canvas');
+  if (dcanvas) {
+    const off = document.createElement('canvas');
+    off.width = genResolution; off.height = genResolution;
+    genDrawCharacter(off.getContext('2d'), genResolution, genResolution, genCompassSelected, state);
+    const dctx = dcanvas.getContext('2d');
+    dctx.imageSmoothingEnabled = false;
+    dctx.clearRect(0, 0, dcanvas.width, dcanvas.height);
+    dctx.drawImage(off, 0, 0, dcanvas.width, dcanvas.height);
+  }
+}
+
+function genApplyPreset(name) {
+  const p = GEN_PRESETS[name];
+  if (!p) return;
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  const setCb  = (id, val) => { const el = document.getElementById(id); if (el) el.checked = val; };
+  setVal('gen-build',        p.build);
+  setVal('gen-skin',         p.skin);
+  setVal('gen-hair-style',   p.hairStyle);
+  setVal('gen-hair-color',   p.hairColor);
+  setVal('gen-outfit-style', p.outfitStyle);
+  setVal('gen-primary',      p.primary);
+  setVal('gen-accent',       p.accent);
+  setVal('gen-pants',        p.pants);
+  setVal('gen-boots',        p.boots);
+  setCb('gen-helmet',        p.helmet);
+  setCb('gen-backpack',      p.backpack);
+  setCb('gen-belt',          p.belt);
+  renderGenPreview();
+}
+
+function genRandomize() {
+  const hairStyles = ['none','short','long','mohawk','buzz','pony'];
+  const outfits = ['vest','tshirt','jacket','hoodie','armor'];
+  const skinColors = ['#f0d8b0','#c8956c','#a06a40','#6b4226'];
+  const rand = arr => arr[Math.floor(Math.random() * arr.length)];
+  const randHex = () => '#' + Math.floor(Math.random()*0x1000000).toString(16).padStart(6,'0');
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  const setCb  = (id, val) => { const el = document.getElementById(id); if (el) el.checked = val; };
+  setVal('gen-build',        Math.floor(Math.random() * 3));
+  setVal('gen-skin',         rand(skinColors));
+  setVal('gen-hair-style',   rand(hairStyles));
+  setVal('gen-hair-color',   randHex());
+  setVal('gen-outfit-style', rand(outfits));
+  setVal('gen-primary',      randHex());
+  setVal('gen-accent',       randHex());
+  setVal('gen-pants',        randHex());
+  setVal('gen-boots',        randHex());
+  setCb('gen-helmet',        Math.random() > 0.5);
+  setCb('gen-backpack',      Math.random() > 0.5);
+  setCb('gen-belt',          Math.random() > 0.3);
+  renderGenPreview();
+}
+
+function genSaveToSlots() {
+  const state = getGenState();
+  ['N','NE','E','SE','S','SW','W','NW'].forEach(dir => {
+    const name = 'PLAYER_' + dir;
+    const off = document.createElement('canvas');
+    off.width = genResolution; off.height = genResolution;
+    genDrawCharacter(off.getContext('2d'), genResolution, genResolution, dir, state);
+    localStorage.setItem('sprite_' + name, off.toDataURL('image/png'));
+    localStorage.removeItem('sprite_' + name + '_frames');
+    delete slotState[name];
+    updateSlotPreview(name);
+  });
+  updateLivePreview();
+  closeGenerator();
+  const resTxt = genResolution === 32 ? ' (32x32) — note: game.html renders PLAYER sprites at 22x22, so detail may be lightly downscaled' : '';
+  setStatus('Generated character' + resTxt + ' saved to all 8 direction slots');
+}
+
+function genDownloadAll() {
+  const state = getGenState();
+  ['N','NE','E','SE','S','SW','W','NW'].forEach((dir, i) => {
+    setTimeout(() => {
+      const off = document.createElement('canvas');
+      off.width = genResolution; off.height = genResolution;
+      genDrawCharacter(off.getContext('2d'), genResolution, genResolution, dir, state);
+      const a = document.createElement('a');
+      a.href = off.toDataURL('image/png');
+      a.download = 'PLAYER_' + dir + '.png';
+      a.click();
+    }, i * 100);
+  });
+}
+
+(function buildGenModal() {
+  if (document.getElementById('gen-overlay')) return;
+
+  const ov = document.createElement('div');
+  ov.id = 'gen-overlay';
+  ov.onclick = e => { if (e.target === ov) closeGenerator(); };
+
+  const box = document.createElement('div');
+  box.id = 'gen-box';
+  ov.appendChild(box);
+
+  // Top bar
+  const topbar = document.createElement('div');
+  topbar.id = 'gen-topbar';
+  topbar.innerHTML = `
+    <div class="gen-title">GENERATE_CHARACTER.SH</div>
+    <button class="btn primary" onclick="genSaveToSlots()">[ Save to Slots ]</button>
+    <button class="btn" onclick="genDownloadAll()">[ Download All 8 ]</button>
+    <button class="btn danger" onclick="closeGenerator()">[ Cancel ]</button>
+  `;
+  box.appendChild(topbar);
+
+  // Body
+  const body = document.createElement('div');
+  body.id = 'gen-body';
+  box.appendChild(body);
+
+  // Left: compass + detail canvas
+  const main = document.createElement('div');
+  main.id = 'gen-main';
+  body.appendChild(main);
+
+  const compass = document.createElement('div');
+  compass.className = 'compass-rose';
+  compass.id = 'gen-compass';
+  const GEN_LAYOUT = [['NW','N','NE'],['W',null,'E'],['SW','S','SE']];
+  GEN_LAYOUT.forEach(row => {
+    row.forEach(dir => {
+      const cell = document.createElement('div');
+      if (!dir) {
+        cell.className = 'compass-cell compass-center';
+        const sil = document.createElement('canvas');
+        sil.width = 40; sil.height = 40;
+        const sc = sil.getContext('2d');
+        sc.fillStyle = '#2a2840';
+        sc.beginPath(); sc.arc(20,22,12,0,Math.PI*2); sc.fill();
+        sc.beginPath(); sc.arc(20,10,6,0,Math.PI*2); sc.fill();
+        cell.appendChild(sil);
+      } else {
+        cell.className = 'compass-cell' + (dir === genCompassSelected ? ' active' : '');
+        cell.id = 'gen-cell-' + dir;
+        const cv = document.createElement('canvas');
+        cv.width = 64; cv.height = 64; cv.id = 'gen-cv-' + dir;
+        cell.appendChild(cv);
+        const lbl = document.createElement('div');
+        lbl.className = 'dir-label'; lbl.textContent = dir;
+        cell.appendChild(lbl);
+        cell.onclick = () => {
+          genCompassSelected = dir;
+          document.querySelectorAll('#gen-compass .compass-cell').forEach(c => c.classList.remove('active'));
+          cell.classList.add('active');
+          renderGenPreview();
+        };
+      }
+      compass.appendChild(cell);
+    });
+  });
+  main.appendChild(compass);
+
+  const detailCv = document.createElement('canvas');
+  detailCv.id = 'gen-detail-canvas'; detailCv.width = 176; detailCv.height = 176;
+  main.appendChild(detailCv);
+
+  // Right panel
+  const right = document.createElement('div');
+  right.id = 'gen-right';
+  body.appendChild(right);
+
+  function addSection(title) {
+    const d = document.createElement('div');
+    d.className = 'gen-section'; d.textContent = title;
+    right.appendChild(d);
+  }
+  function addRow(label, input) {
+    const d = document.createElement('div'); d.className = 'gen-row';
+    if (label) { const l = document.createElement('label'); l.className = 'gen-label'; l.textContent = label; d.appendChild(l); }
+    if (input) d.appendChild(input);
+    right.appendChild(d);
+    return d;
+  }
+  function colorInput(id, val) {
+    const i = document.createElement('input');
+    i.type = 'color'; i.id = id; i.value = val;
+    i.oninput = () => renderGenPreview();
+    return i;
+  }
+
+  // Resolution
+  addSection('RESOLUTION');
+  const resRow = document.createElement('div');
+  resRow.style.cssText = 'display:flex;gap:6px;';
+  const res22Btn = document.createElement('button');
+  res22Btn.className = 'btn primary'; res22Btn.id = 'gen-res-22';
+  res22Btn.style.cssText = 'font-size:11px;padding:3px 8px;'; res22Btn.textContent = '[ 22\xd722 ]';
+  const res32Btn = document.createElement('button');
+  res32Btn.className = 'btn'; res32Btn.id = 'gen-res-32';
+  res32Btn.style.cssText = 'font-size:11px;padding:3px 8px;'; res32Btn.textContent = '[ 32\xd732 ]';
+  const resWarn = document.createElement('div');
+  resWarn.id = 'gen-res-warn'; resWarn.style.cssText = 'font-size:10px;color:var(--amber);margin-top:4px;display:none;';
+  resWarn.textContent = '32\xd732 sprites use ~2\xd7 more storage per frame than 22\xd722';
+  res22Btn.onclick = () => { genResolution = 22; res22Btn.className = 'btn primary'; res32Btn.className = 'btn'; resWarn.style.display = 'none'; renderGenPreview(); };
+  res32Btn.onclick = () => { genResolution = 32; res22Btn.className = 'btn'; res32Btn.className = 'btn primary'; resWarn.style.display = 'block'; renderGenPreview(); };
+  resRow.appendChild(res22Btn); resRow.appendChild(res32Btn);
+  right.appendChild(resRow); right.appendChild(resWarn);
+
+  // Presets
+  addSection('PRESETS');
+  const presetsDiv = document.createElement('div');
+  presetsDiv.className = 'gen-presets';
+  ['soldier','scout','heavy'].forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.textContent = '[ ' + p.charAt(0).toUpperCase() + p.slice(1) + ' ]';
+    btn.onclick = () => genApplyPreset(p);
+    presetsDiv.appendChild(btn);
+  });
+  right.appendChild(presetsDiv);
+
+  // Body section
+  addSection('BODY');
+  const buildRow = document.createElement('div'); buildRow.className = 'gen-row';
+  const buildLbl = document.createElement('label'); buildLbl.className = 'gen-label'; buildLbl.textContent = 'Build';
+  const buildSlider = document.createElement('input');
+  buildSlider.type = 'range'; buildSlider.id = 'gen-build';
+  buildSlider.min = '0'; buildSlider.max = '2'; buildSlider.step = '1'; buildSlider.value = '1';
+  buildSlider.style.cssText = 'flex:1;accent-color:var(--green);';
+  buildSlider.oninput = () => renderGenPreview();
+  const buildValLbl = document.createElement('span');
+  buildValLbl.id = 'gen-build-lbl'; buildValLbl.className = 'gen-build-lbl'; buildValLbl.textContent = 'average';
+  buildRow.appendChild(buildLbl); buildRow.appendChild(buildSlider); buildRow.appendChild(buildValLbl);
+  right.appendChild(buildRow);
+
+  const skinInput = colorInput('gen-skin', '#c8956c');
+  addRow('Skin', skinInput);
+
+  const swatchRow = document.createElement('div'); swatchRow.className = 'gen-swatches';
+  ['#f0d8b0','#c8956c','#a06a40','#6b4226'].forEach(col => {
+    const sw = document.createElement('div');
+    sw.className = 'gen-swatch'; sw.style.background = col;
+    sw.onclick = () => { skinInput.value = col; renderGenPreview(); };
+    swatchRow.appendChild(sw);
+  });
+  right.appendChild(swatchRow);
+
+  // Hair section
+  addSection('HAIR');
+  const hairSel = document.createElement('select');
+  hairSel.id = 'gen-hair-style';
+  hairSel.style.cssText = 'flex:1;background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:2px 4px;';
+  ['none','short','long','mohawk','buzz','pony'].forEach(s => {
+    const o = document.createElement('option'); o.value = s; o.textContent = s; hairSel.appendChild(o);
+  });
+  hairSel.value = 'short'; hairSel.oninput = () => renderGenPreview();
+  addRow('Style', hairSel);
+  addRow('Color', colorInput('gen-hair-color', '#2a1a0a'));
+
+  // Outfit section
+  addSection('OUTFIT');
+  const outfitSel = document.createElement('select');
+  outfitSel.id = 'gen-outfit-style';
+  outfitSel.style.cssText = 'flex:1;background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:2px 4px;';
+  ['vest','tshirt','jacket','hoodie','armor'].forEach(s => {
+    const o = document.createElement('option'); o.value = s; o.textContent = s; outfitSel.appendChild(o);
+  });
+  outfitSel.value = 'vest'; outfitSel.oninput = () => renderGenPreview();
+  addRow('Style', outfitSel);
+  [['Primary','gen-primary','#3a5a8a'],['Accent','gen-accent','#2a3a5a'],['Pants','gen-pants','#3a3a3a'],['Boots','gen-boots','#1a1a1a']].forEach(([lbl,id,val]) => {
+    addRow(lbl, colorInput(id, val));
+  });
+
+  // Gear section
+  addSection('GEAR');
+  [['gen-helmet','Helmet',false],['gen-backpack','Backpack',false],['gen-belt','Belt/Holster',true]].forEach(([id,lbl,checked]) => {
+    const r = document.createElement('div'); r.className = 'gen-checkbox-row';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.id = id; cb.checked = checked;
+    cb.onchange = () => renderGenPreview();
+    const l = document.createElement('label'); l.htmlFor = id; l.textContent = lbl; l.style.cursor = 'pointer';
+    r.appendChild(cb); r.appendChild(l); right.appendChild(r);
+  });
+
+  // Randomize
+  addSection('');
+  const randBtn = document.createElement('button');
+  randBtn.className = 'btn'; randBtn.style.cssText = 'width:100%;margin-top:4px;';
+  randBtn.textContent = '[ 🎲 Randomize ]'; randBtn.onclick = genRandomize;
+  right.appendChild(randBtn);
+
+  document.body.appendChild(ov);
+})();
+
+// === LAUNCH GAME ===
+
+document.getElementById('btn-launch').onclick = () => {
+  window.open('game.html', '_blank');
+};
+
+document.getElementById('btn-map-editor').onclick = () => {
+  window.open('map-editor.html', '_blank');
+};
+
+// === SPRITE EDITOR HANDOFF ===
+
+// Renders the sprite's current look (custom image or default shape — via the same
+// drawSpriteToCanvas() used everywhere else) and hands it to sprite-editor.html as a
+// one-time seed so editing starts from what's actually on screen, not a blank canvas.
+document.getElementById('btn-edit-sprite').onclick = () => {
+  const name = currentSpriteName;
+  const { w, h } = getSpriteSize(name);
+  const seed = document.createElement('canvas');
+  seed.width = w; seed.height = h;
+  drawSpriteToCanvas(name, seed);
+  try { localStorage.setItem('sprite_editor_seed', seed.toDataURL()); } catch(e) {}
+  window.open('sprite-editor.html?sprite=' + encodeURIComponent(name), '_blank');
+};
+
+// sprite-editor.html saves directly to localStorage from its own tab — pick up the
+// change here so the slot thumbnail / CUSTOM badge / live preview refresh without
+// requiring a manual reload of this tab.
+window.addEventListener('storage', e => {
+  if (!e.key) return;
+  const m = e.key.match(/^sprite_(.+?)(_frames|_fps)?$/);
+  if (!m) return;
+  delete slotState[m[1]];
+  updateSlotPreview(m[1]);
+});
+
+// === INIT ===
+
+function rebuildUI() {
+  const groupEls = {
+    characters:    document.getElementById('group-characters'),
+    enemies:       document.getElementById('group-enemies'),
+    rangedWeapons: document.getElementById('group-ranged-weapons'),
+    meleeWeapons:  document.getElementById('group-melee-weapons'),
+    pickups:       document.getElementById('group-pickups'),
+  };
+  Object.values(groupEls).forEach(el => { el.innerHTML = ''; });
+
+  Object.entries(SPRITE_GROUPS).forEach(([group, names]) => {
+    if (group === 'characters') {
+      buildCompassRose(groupEls[group]);
+      names.forEach(name => bindDropZone(name));
+    } else {
+      names.forEach(name => {
+        buildSlotRow(name, groupEls[group]);
+        bindDropZone(name);
+      });
+    }
+  });
+
+  updateLivePreview();
+  updateStats();
+}
+
+(function loadPersistedCustomWeapons() {
+  const custom = loadCustomWeaponsList();
+  (custom.ranged || []).forEach(id => registerWeapon('ranged', id));
+  (custom.melee  || []).forEach(id => registerWeapon('melee', id));
+})();
+
+(function loadPersistedCustomEnemies() {
+  loadCustomEnemiesList().forEach(id => registerEnemy(id));
+})();
+
+document.getElementById('btn-add-ranged').onclick = () => addWeapon('ranged');
+document.getElementById('btn-add-melee').onclick = () => addWeapon('melee');
+document.getElementById('btn-add-enemy').onclick = () => addEnemy();
+
+rebuildUI();
+</script>
+
+</body>
+</html>

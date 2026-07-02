@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MERCS DEV — Sprite Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0d0b12;
+    --surface:  #13111c;
+    --surface2: #1a1826;
+    --border:   #2e2c40;
+    --border2:  #3e3c58;
+    --green:    #3ef83e;
+    --green-dim:#1a6e1a;
+    --amber:    #c8a840;
+    --red:      #c84040;
+    --text:     #c8c6e0;
+    --text-dim: #5a5870;
+    --mono:     'Share Tech Mono', 'Courier New', monospace;
+    --vt:       'VT323', monospace;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:var(--mono); font-size:13px; min-height:100vh; }
+
+  #topbar {
+    background:var(--surface); border-bottom:1px solid var(--border);
+    padding:10px 20px; display:flex; align-items:center; gap:20px;
+  }
+  #topbar .logo { font-family:var(--vt); font-size:22px; color:var(--green); letter-spacing:2px; }
+  #topbar .sub  { color:var(--text-dim); font-size:11px; }
+  #topbar .spacer { flex:1; }
+  .btn {
+    font-family:var(--mono); font-size:12px; color:var(--text);
+    background:var(--surface2); border:1px solid var(--border2);
+    padding:5px 14px; cursor:pointer; letter-spacing:1px;
+    transition: border-color .15s, color .15s;
+  }
+  .btn:hover { border-color:var(--green); color:var(--green); }
+  .btn.primary { border-color:var(--green); color:var(--green); }
+  .btn.primary:hover { background:var(--green-dim); }
+  .btn.danger { border-color:var(--red); color:var(--red); }
+  .btn.danger:hover { background:rgba(200,64,64,.15); }
+  .btn.small { font-size:11px; padding:3px 8px; }
+  .btn[disabled] { opacity:.4; cursor:default; pointer-events:none; }
+
+  #body { display:flex; gap:0; min-height:calc(100vh - 45px); }
+  #main-col { flex:1; padding:24px; display:flex; align-items:flex-start; justify-content:center; }
+  #side-col { width:300px; border-left:1px solid var(--border); padding:16px; display:flex; flex-direction:column; gap:16px; }
+
+  .section-title {
+    font-family:var(--vt); font-size:16px; color:var(--text-dim);
+    border-bottom:1px solid var(--border); padding-bottom:6px; margin-bottom:10px;
+    letter-spacing:2px;
+  }
+  .section-title span { color:var(--green); }
+
+  #canvas-wrap { position:relative; background:#0d0b12; border:1px solid var(--border2); }
+  #pixel-canvas { display:block; image-rendering:pixelated; cursor:crosshair; }
+
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  .field-label { font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-bottom:6px; }
+
+  #res-warn {
+    font-size:10px; color:var(--amber); margin-top:6px; display:none; line-height:1.5;
+  }
+
+  .tool-row { display:flex; gap:6px; align-items:center; }
+  .tool-row input[type=color] {
+    width:36px; height:30px; border:1px solid var(--border2); background:var(--surface2); cursor:pointer; padding:2px;
+  }
+  .checkbox-row { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text-dim); }
+  .checkbox-row input { accent-color:var(--green); }
+
+  #native-preview-wrap { display:flex; align-items:center; gap:10px; }
+  #native-preview { image-rendering:pixelated; background:#0d0b12; border:1px solid var(--border2); }
+
+  #status-msg { font-size:11px; color:var(--green); min-height:16px; }
+  #missing-sprite { padding:40px; color:var(--text-dim); font-size:16px; text-align:center; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo">MERCS DEV</div>
+  <div class="sub">&gt; sprite_editor.exe</div>
+  <div class="spacer"></div>
+  <a href="devtool.html" class="btn" style="text-decoration:none; display:inline-block;">[ Back to Dev Tool ]</a>
+  <button class="btn danger" id="btn-close-tab">[ Close Tab ]</button>
+</div>
+
+<div id="body">
+  <div id="main-col">
+    <div id="missing-sprite" style="display:none;">
+      No sprite selected.<br><br>Open this page via the [ Edit ] button next to LIVE PREVIEW in devtool.html.
+    </div>
+    <div id="editor-wrap" style="display:none;">
+      <div id="canvas-wrap">
+        <canvas id="pixel-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div id="side-col">
+    <div>
+      <div class="section-title">&gt; <span id="sprite-title">SPRITE</span></div>
+      <div class="field-label" id="sprite-subtitle"></div>
+    </div>
+
+    <div>
+      <div class="field-label">RESOLUTION</div>
+      <div class="row" id="res-buttons"></div>
+      <div id="res-warn"></div>
+    </div>
+
+    <div>
+      <div class="field-label">TOOLS</div>
+      <div class="tool-row">
+        <input type="color" id="color-picker" value="#3ef83e">
+        <button class="btn small primary" id="tool-pencil">[ Pencil ]</button>
+        <button class="btn small" id="tool-eraser">[ Eraser ]</button>
+        <button class="btn small" id="tool-bucket">[ Bucket ]</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn small danger" id="btn-clear">[ Clear Canvas ]</button>
+      </div>
+      <div class="checkbox-row" style="margin-top:8px;">
+        <input type="checkbox" id="chk-grid" checked>
+        <label for="chk-grid">Show pixel grid</label>
+      </div>
+    </div>
+
+    <div>
+      <div class="field-label">RENDERS AS (in-game size)</div>
+      <div id="native-preview-wrap">
+        <canvas id="native-preview"></canvas>
+        <div id="native-preview-label" style="font-size:11px; color:var(--text-dim);"></div>
+      </div>
+    </div>
+
+    <div>
+      <button class="btn primary" id="btn-save" style="width:100%;">[ Save Sprite ]</button>
+      <div id="status-msg"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// Mirrors getSpriteSize() in devtool.html / game.html — this page is standalone
+// (no shared JS module system in this project), so the tiny lookup is duplicated.
+function getSpriteSize(name) {
+  if (name.startsWith('PLAYER_')) return { w:22, h:22 };
+  if (name.startsWith('ENEMY_'))  return { w:20, h:20 };
+  if (name.startsWith('WEAPON_')) return { w:16, h:8  };
+  return { w:16, h:16 };
+}
+
+const params = new URLSearchParams(location.search);
+const spriteName = params.get('sprite');
+
+if (!spriteName) {
+  document.getElementById('missing-sprite').style.display = 'block';
+} else {
+  document.getElementById('editor-wrap').style.display = 'block';
+  initEditor(spriteName);
+}
+
+document.getElementById('btn-close-tab').onclick = () => window.close();
+
+function initEditor(name) {
+  const native = getSpriteSize(name);
+
+  document.getElementById('sprite-title').textContent = name;
+  document.getElementById('sprite-subtitle').textContent = 'native size ' + native.w + '×' + native.h;
+
+  // === Working bitmap — single source of truth for the pixel grid, the zoomed
+  // canvas, and the "renders as" preview are all redrawn from this. ===
+  let work = document.createElement('canvas');
+  work.width = native.w; work.height = native.h;
+
+  // Seed from the current look (custom image or default shape) handed off by
+  // devtool.html's Edit button, so editing starts from what's on screen already.
+  const seedUrl = localStorage.getItem('sprite_editor_seed');
+  localStorage.removeItem('sprite_editor_seed'); // one-time handoff, consume immediately
+  if (seedUrl) {
+    const seedImg = new Image();
+    seedImg.onload = () => {
+      const wctx = work.getContext('2d');
+      wctx.imageSmoothingEnabled = false;
+      wctx.drawImage(seedImg, 0, 0, work.width, work.height);
+      render();
+    };
+    seedImg.src = seedUrl;
+  }
+
+  // === Resolution buttons ===
+  const resOptions = [{ label:'Native ' + native.w + '×' + native.h, w:native.w, h:native.h }];
+  if (!(native.w === 22 && native.h === 22)) resOptions.push({ label:'22×22', w:22, h:22 });
+  resOptions.push({ label:'32×32', w:32, h:32 });
+
+  const resButtonsEl = document.getElementById('res-buttons');
+  const resWarnEl = document.getElementById('res-warn');
+  resWarnEl.textContent = 'Renders in-game at ' + native.w + '×' + native.h + ' — this canvas will be stretched/squashed to fit.';
+
+  function setActiveResButton(w, h) {
+    Array.from(resButtonsEl.children).forEach(btn => {
+      const match = btn.dataset.w == w && btn.dataset.h == h;
+      btn.className = 'btn small' + (match ? ' primary' : '');
+    });
+    resWarnEl.style.display = (w === native.w && h === native.h) ? 'none' : 'block';
+  }
+
+  resOptions.forEach(opt => {
+    const btn = document.createElement('button');
+    btn.className = 'btn small';
+    btn.textContent = '[ ' + opt.label + ' ]';
+    btn.dataset.w = opt.w; btn.dataset.h = opt.h;
+    btn.onclick = () => resizeWork(opt.w, opt.h);
+    resButtonsEl.appendChild(btn);
+  });
+  setActiveResButton(native.w, native.h);
+
+  function resizeWork(newW, newH) {
+    const resized = document.createElement('canvas');
+    resized.width = newW; resized.height = newH;
+    const rctx = resized.getContext('2d');
+    rctx.imageSmoothingEnabled = false;
+    rctx.drawImage(work, 0, 0, work.width, work.height, 0, 0, newW, newH);
+    work = resized;
+    setActiveResButton(newW, newH);
+    render();
+  }
+
+  // === Tools ===
+  let currentTool = 'pencil';
+  let currentColor = document.getElementById('color-picker').value;
+  const toolButtons = {
+    pencil: document.getElementById('tool-pencil'),
+    eraser: document.getElementById('tool-eraser'),
+    bucket: document.getElementById('tool-bucket'),
+  };
+  function setTool(tool) {
+    currentTool = tool;
+    Object.entries(toolButtons).forEach(([t, btn]) => {
+      btn.className = 'btn small' + (t === tool ? ' primary' : '');
+    });
+  }
+  toolButtons.pencil.onclick = () => setTool('pencil');
+  toolButtons.eraser.onclick = () => setTool('eraser');
+  toolButtons.bucket.onclick = () => setTool('bucket');
+  document.getElementById('color-picker').addEventListener('input', e => { currentColor = e.target.value; });
+
+  document.getElementById('btn-clear').onclick = () => {
+    work.getContext('2d').clearRect(0, 0, work.width, work.height);
+    render();
+  };
+
+  // === Pixel grid canvas (zoomed) ===
+  const pixelCanvas = document.getElementById('pixel-canvas');
+  const pctx = pixelCanvas.getContext('2d');
+  const chkGrid = document.getElementById('chk-grid');
+  chkGrid.addEventListener('change', render);
+
+  function cellSize() {
+    return Math.max(8, Math.floor(480 / Math.max(work.width, work.height)));
+  }
+
+  function render() {
+    const cs = cellSize();
+    pixelCanvas.width = work.width * cs;
+    pixelCanvas.height = work.height * cs;
+    pctx.imageSmoothingEnabled = false;
+    pctx.clearRect(0, 0, pixelCanvas.width, pixelCanvas.height);
+    pctx.drawImage(work, 0, 0, pixelCanvas.width, pixelCanvas.height);
+
+    if (chkGrid.checked) {
+      pctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      pctx.lineWidth = 1;
+      for (let x = 0; x <= work.width; x++) {
+        pctx.beginPath(); pctx.moveTo(x*cs+0.5, 0); pctx.lineTo(x*cs+0.5, pixelCanvas.height); pctx.stroke();
+      }
+      for (let y = 0; y <= work.height; y++) {
+        pctx.beginPath(); pctx.moveTo(0, y*cs+0.5); pctx.lineTo(pixelCanvas.width, y*cs+0.5); pctx.stroke();
+      }
+    }
+
+    renderNativePreview();
+  }
+
+  function cellFromEvent(e) {
+    const rect = pixelCanvas.getBoundingClientRect();
+    const cs = cellSize();
+    const px = Math.floor((e.clientX - rect.left) / cs);
+    const py = Math.floor((e.clientY - rect.top) / cs);
+    return { px, py };
+  }
+
+  function paintAt(px, py) {
+    if (px < 0 || py < 0 || px >= work.width || py >= work.height) return;
+    const wctx = work.getContext('2d');
+    if (currentTool === 'pencil') {
+      wctx.fillStyle = currentColor;
+      wctx.fillRect(px, py, 1, 1);
+    } else if (currentTool === 'eraser') {
+      wctx.clearRect(px, py, 1, 1);
+    } else if (currentTool === 'bucket') {
+      floodFill(px, py, currentColor);
+    }
+    render();
+  }
+
+  function floodFill(startX, startY, colorHex) {
+    const wctx = work.getContext('2d');
+    const w = work.width, h = work.height;
+    const imgData = wctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    const idx = (x, y) => (y*w + x) * 4;
+
+    const tr = data[idx(startX,startY)], tg = data[idx(startX,startY)+1],
+          tb = data[idx(startX,startY)+2], ta = data[idx(startX,startY)+3];
+
+    const fillRgb = hexToRgb(colorHex);
+    if (tr === fillRgb.r && tg === fillRgb.g && tb === fillRgb.b && ta === 255) return;
+
+    const stack = [[startX, startY]];
+    const seen = new Uint8Array(w*h);
+    while (stack.length) {
+      const [x, y] = stack.pop();
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      if (seen[y*w+x]) continue;
+      const i = idx(x, y);
+      if (data[i] !== tr || data[i+1] !== tg || data[i+2] !== tb || data[i+3] !== ta) continue;
+      seen[y*w+x] = 1;
+      data[i] = fillRgb.r; data[i+1] = fillRgb.g; data[i+2] = fillRgb.b; data[i+3] = 255;
+      stack.push([x+1,y],[x-1,y],[x,y+1],[x,y-1]);
+    }
+    wctx.putImageData(imgData, 0, 0);
+  }
+
+  function hexToRgb(hex) {
+    const v = parseInt(hex.slice(1), 16);
+    return { r:(v>>16)&255, g:(v>>8)&255, b:v&255 };
+  }
+
+  let painting = false;
+  pixelCanvas.addEventListener('mousedown', e => {
+    painting = true;
+    const { px, py } = cellFromEvent(e);
+    paintAt(px, py);
+  });
+  window.addEventListener('mousemove', e => {
+    if (!painting) return;
+    const { px, py } = cellFromEvent(e);
+    paintAt(px, py);
+  });
+  window.addEventListener('mouseup', () => { painting = false; });
+  pixelCanvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  // === "Renders as" preview — always shown at native size, so switching to a
+  // non-native working resolution visibly demonstrates the stretch/squash. ===
+  const nativePreview = document.getElementById('native-preview');
+  const NATIVE_PREVIEW_SCALE = Math.max(4, Math.min(12, Math.floor(160 / Math.max(native.w, native.h))));
+  nativePreview.width = native.w * NATIVE_PREVIEW_SCALE;
+  nativePreview.height = native.h * NATIVE_PREVIEW_SCALE;
+  document.getElementById('native-preview-label').textContent = native.w + '×' + native.h;
+
+  function renderNativePreview() {
+    const nctx = nativePreview.getContext('2d');
+    nctx.imageSmoothingEnabled = false;
+    nctx.clearRect(0, 0, nativePreview.width, nativePreview.height);
+    nctx.drawImage(work, 0, 0, nativePreview.width, nativePreview.height);
+  }
+
+  // === Save ===
+  document.getElementById('btn-save').onclick = () => {
+    const url = work.toDataURL('image/png');
+    localStorage.setItem('sprite_' + name, url);
+    localStorage.removeItem('sprite_' + name + '_frames');
+    localStorage.removeItem('sprite_' + name + '_fps');
+    const statusEl = document.getElementById('status-msg');
+    statusEl.textContent = 'Saved — ' + new Date().toLocaleTimeString();
+    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  };
+
+  render();
+}
+</script>
+
+</body>
+</html>
