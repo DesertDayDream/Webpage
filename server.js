@@ -1,9 +1,10 @@
-const crypto   = require('crypto');
-const express  = require('express');
-const Database = require('better-sqlite3');
-const multer   = require('multer');
-const path     = require('path');
-const fs       = require('fs');
+const crypto      = require('crypto');
+const express     = require('express');
+const Database    = require('better-sqlite3');
+const multer      = require('multer');
+const path        = require('path');
+const fs          = require('fs');
+const compression = require('compression');
 const { WebSocketServer } = require('ws');
 
 const app  = express();
@@ -77,8 +78,11 @@ const upload = multer({
 });
 
 // Middleware
+app.use(compression());
 app.use(express.json({ limit: '50mb' }));
-app.use('/uploads', express.static(UPLOAD_DIR));
+// Uploaded filenames are unique+timestamped and never overwritten, so it's
+// safe to let browsers cache them indefinitely.
+app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y', immutable: true }));
 app.use('/data', function(req, res) { res.status(403).end(); }); // block DB from public access
 app.use(express.static(__dirname));
 

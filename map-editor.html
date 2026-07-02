@@ -63,7 +63,6 @@
   #map-canvas { display:block; cursor:crosshair; }
 
   .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
-  .field-label { font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-bottom:6px; }
   .hint { font-size:11px; color:var(--text-dim); line-height:1.6; }
 
   .size-row { display:flex; align-items:center; gap:6px; margin-bottom:8px; }
@@ -159,7 +158,7 @@
     </div>
 
     <div>
-      <button class="btn primary" id="btn-save" style="width:100%;">[ Save Map ]</button>
+      <button class="btn primary" id="btn-save" style="width:100%;">[ Publish Map ]</button>
       <div id="status-msg"></div>
     </div>
   </div>
@@ -547,11 +546,33 @@ document.getElementById('btn-reset-map').onclick = () => {
   render();
 };
 
-document.getElementById('btn-save').onclick = () => {
+document.getElementById('btn-save').onclick = async () => {
   localStorage.setItem('mercs_map', JSON.stringify(map));
   const statusEl = document.getElementById('status-msg');
-  statusEl.textContent = 'Saved — ' + new Date().toLocaleTimeString();
-  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  statusEl.textContent = 'Publishing...';
+  try {
+    // /api/mercs-config POST replaces the whole published config, so fetch the
+    // current one first and only overwrite the map slice — otherwise this
+    // would wipe out the admin's published balance/enemy/loot/sprite config.
+    const getRes = await fetch(API_BASE + '/api/mercs-config');
+    const getData = await getRes.json();
+    const fullConfig = (getData && getData.config) || {};
+    fullConfig.map = map;
+
+    const postRes = await fetch(API_BASE + '/api/mercs-config', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: fullConfig }),
+    });
+    const postData = await postRes.json();
+    statusEl.textContent = postRes.ok
+      ? 'Published — live for all players (' + new Date().toLocaleTimeString() + ')'
+      : 'Publish failed: ' + (postData && postData.error || 'unknown error');
+  } catch(e) {
+    statusEl.textContent = 'Publish failed: ' + e.message;
+  }
+  setTimeout(() => { statusEl.textContent = ''; }, 4000);
 };
 
 document.getElementById('btn-close-tab').onclick = () => window.close();

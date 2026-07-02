@@ -285,7 +285,6 @@ html, body {
 .etool.danger:hover { color: var(--red); border-color: var(--red); background: rgba(160,90,82,0.06); }
 
 /* ── HOME ── */
-#page-home .ascii,
 .ascii {
   font-family: var(--vt);
   font-size: 22px;
