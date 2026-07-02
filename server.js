@@ -60,6 +60,14 @@ function requireAuth(req, res, next) {
 app.use(function(req, res, next) {
   var origin = req.headers.origin || '';
   var isLocal = /^https?:\/\/localhost(:\d+)?$/.test(origin);
+  // The Access-Control-Allow-Origin value below depends on the request's
+  // Origin header, so any cache sitting in front of this response (the
+  // browser's own HTTP cache included) must be told the response varies by
+  // that header — otherwise a response cached from one origin (or no
+  // origin at all) can get served back for a different origin's request,
+  // which is exactly what silently broke cross-origin audio playback on
+  // the aggressively-cached /uploads route (maxAge 1y, immutable).
+  res.setHeader('Vary', 'Origin');
   if (origin && (isLocal || CORS_ORIGINS.includes(origin))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
