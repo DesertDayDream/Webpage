@@ -24,10 +24,17 @@
 </head>
 <body>
 <div id="wrap"><canvas id="game-canvas" width="800" height="600"></canvas></div>
+<script>window.SITE_API_BASE = 'https://webpage-production-111b.up.railway.app';</script>
 <script>
 'use strict';
 
 (async function() {
+
+// Mirrors main.js's API_BASE — this page can be served from a different
+// origin than the API/WebSocket backend (e.g. static hosting in front of
+// Railway), so every /api/ call and the WebSocket connection below must go
+// through this instead of a same-origin-only relative path.
+const API_BASE = (typeof window.SITE_API_BASE === 'string') ? window.SITE_API_BASE : '';
 
 // Minimal loading state on canvas while we fetch the devtool-published config
 // from the server, so there isn't a blank flash before the rest of init runs.
@@ -75,7 +82,7 @@ function applyServerConfigToLocalStorage(cfg) {
 }
 
 try {
-  const r = await fetch('/api/mercs-config');
+  const r = await fetch(API_BASE + '/api/mercs-config');
   const d = await r.json();
   applyServerConfigToLocalStorage(d && d.config);
 } catch(e) {
@@ -1413,8 +1420,10 @@ const Net = {
   playerId: null,
   handlers: {},
   connect(onOpen, onError) {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(proto + '//' + location.host);
+    const base = API_BASE || (location.protocol + '//' + location.host);
+    const proto = base.startsWith('https') ? 'wss:' : 'ws:';
+    const host = base.replace(/^https?:\/\//, '');
+    const socket = new WebSocket(proto + '//' + host);
     this.ws = socket;
     socket.onopen  = () => { if (this.ws === socket) onOpen && onOpen(); };
     socket.onerror = () => { if (this.ws === socket) onError && onError(); };

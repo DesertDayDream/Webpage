@@ -165,8 +165,14 @@
   </div>
 </div>
 
+<script>window.SITE_API_BASE = 'https://webpage-production-111b.up.railway.app';</script>
 <script>
 'use strict';
+
+// Mirrors main.js's API_BASE — this page can be served from a different
+// origin than the API backend (e.g. static hosting in front of Railway), so
+// every /api/ call below must go through this instead of a relative path.
+const API_BASE = (typeof window.SITE_API_BASE === 'string') ? window.SITE_API_BASE : '';
 
 // Mirrors game.html's applyServerConfigToLocalStorage — duplicated since this
 // project has no shared JS module system. This tool only cares about the
@@ -189,7 +195,7 @@ function hideAuthGate() {
 async function boot() {
   let isAdminHere = false;
   try {
-    const r = await fetch('/api/auth-check', { credentials: 'include' });
+    const r = await fetch(API_BASE + '/api/auth-check', { credentials: 'include' });
     const d = await r.json();
     isAdminHere = !!d.admin;
   } catch(e) {}
@@ -200,7 +206,7 @@ async function boot() {
   }
 
   try {
-    const r = await fetch('/api/mercs-config');
+    const r = await fetch(API_BASE + '/api/mercs-config');
     const d = await r.json();
     applyServerConfigToLocalStorage(d && d.config);
   } catch(e) {}
