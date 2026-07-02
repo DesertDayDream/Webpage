@@ -87,6 +87,26 @@
 
   .slot-actions { display:flex; flex-direction:column; justify-content:center; gap:6px; padding:8px; border-left:1px solid var(--border); }
 
+  /* ── SOUND SLOTS (attack/damage/death — attached to character + enemies) ── */
+  .sound-slots { display:flex; gap:4px; margin-top:2px; }
+  .sound-slot {
+    font-size:9px; padding:2px 5px; border:1px solid var(--border2); background:var(--surface2);
+    color:var(--text-dim); cursor:pointer; letter-spacing:.5px; white-space:nowrap;
+    transition: border-color .15s, color .15s;
+  }
+  .sound-slot:hover { border-color:var(--green); color:var(--green); }
+  .sound-slot.has-sound { border-color:var(--green-dim); color:var(--green); }
+  .sound-slot .sx { margin-left:3px; color:var(--red); }
+  .sound-slot .sx:hover { color:#ff8080; }
+
+  /* ── SOUNDTRACK ── */
+  .track-row {
+    background:var(--surface); border:1px solid var(--border);
+    margin-bottom:6px; display:flex; align-items:center; gap:10px; padding:8px 12px;
+  }
+  .track-row .track-name { flex:1; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #soundtrack-empty { font-size:11px; color:var(--text-dim); }
+
   /* ── EQUIP TOGGLE ── */
   .equip-toggle {
     display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;
@@ -238,7 +258,19 @@
 
 <div id="body">
   <div id="main-col">
-    <div class="section-title">&gt; <span>CHARACTERS</span> // player</div>
+    <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
+      <span>&gt; <span>MENU MUSIC</span> // shuffled, plays outside a match</span>
+      <button class="btn" id="btn-add-track-menu" style="font-size:11px; padding:3px 10px;">[ + Add Track(s) ]</button>
+    </div>
+    <div id="soundtrack-menu-list"></div>
+
+    <div class="section-title" style="margin-top:20px; display:flex; align-items:center; justify-content:space-between;">
+      <span>&gt; <span>GAMEPLAY MUSIC</span> // shuffled, plays during a match</span>
+      <button class="btn" id="btn-add-track-gameplay" style="font-size:11px; padding:3px 10px;">[ + Add Track(s) ]</button>
+    </div>
+    <div id="soundtrack-gameplay-list"></div>
+
+    <div class="section-title" style="margin-top:20px;">&gt; <span>CHARACTERS</span> // player</div>
     <div id="group-characters"></div>
 
     <div class="section-title" style="margin-top:20px; display:flex; align-items:center; justify-content:space-between;">
@@ -1014,6 +1046,16 @@ function buildCompassRose(container) {
 
   wrap.appendChild(btnRow);
 
+  // Sound effects — one set for the whole character, not per-direction like
+  // the sprite slots above (damage-taken/death don't vary by facing). No
+  // attack sound here — that lives on each weapon instead, since attack
+  // sound should change with whatever's equipped.
+  const soundLbl = document.createElement('div');
+  soundLbl.style.cssText = 'font-size:10px;color:var(--text-dim);letter-spacing:1px;margin-bottom:4px;';
+  soundLbl.textContent = 'SOUNDS';
+  wrap.appendChild(soundLbl);
+  wrap.appendChild(buildSoundSlots('PLAYER', ['damage', 'death']));
+
   container.appendChild(wrap);
   updateCompassDetail();
 }
@@ -1102,6 +1144,16 @@ function buildSlotRow(name, container) {
   statusEl.id = 'status-' + name;
   statusEl.textContent = isCustom(name) ? '● CUSTOM' : '○ DEFAULT';
   info.appendChild(nameEl); info.appendChild(statusEl);
+
+  // Sound effects — enemies get all three; weapons get an attack sound;
+  // pickups get a spawn (dropped from an enemy) and pickup (collected) sound.
+  if (SPRITE_GROUPS.enemies.includes(name)) {
+    info.appendChild(buildSoundSlots(name, ['attack', 'damage', 'death']));
+  } else if (weaponCategory(name)) {
+    info.appendChild(buildSoundSlots(name, ['attack']));
+  } else if (SPRITE_GROUPS.pickups.includes(name)) {
+    info.appendChild(buildSoundSlots(name, ['spawn', 'pickup']));
+  }
 
   // Actions
   const actions = document.createElement('div');
@@ -1456,6 +1508,165 @@ function bindDropZone(name) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+// === SOUNDTRACK & SOUND EFFECTS ===
+//
+// Unlike sprite images (small pixel art, stored as base64 directly in
+// localStorage), audio files are uploaded to the server's real file storage
+// (the same /api/upload endpoint blog media already uses) — only the
+// resulting URL gets stored locally/published, so localStorage and the
+// published config blob stay small regardless of file size.
+
+const audioFileInput = document.createElement('input');
+audioFileInput.type = 'file'; audioFileInput.style.display = 'none';
+audioFileInput.accept = 'audio/*';
+document.body.appendChild(audioFileInput);
+
+function uploadAudioFile(file) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API_BASE + '/api/upload');
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) setStatus('Uploading... ' + Math.round(e.loaded / e.total * 100) + '%');
+    };
+    xhr.onload = () => {
+      if (xhr.status !== 200) { reject(new Error('upload failed (' + xhr.status + ')')); return; }
+      let data;
+      try { data = JSON.parse(xhr.responseText); } catch(e) { reject(new Error('upload failed — bad response')); return; }
+      if (!data.url) { reject(new Error('upload failed')); return; }
+      resolve(data.url);
+    };
+    xhr.onerror = () => reject(new Error('upload error — check your connection or file size'));
+    xhr.send(formData);
+  });
+}
+
+audioFileInput.addEventListener('change', async () => {
+  const files = Array.from(audioFileInput.files);
+  if (files.length === 0) return;
+  const mode = audioFileInput.dataset.mode;
+
+  if (mode === 'soundtrack') {
+    const playlist = audioFileInput.dataset.playlist; // 'menu' | 'gameplay'
+    setStatus('Uploading ' + files.length + ' track(s)...');
+    const list = loadSoundtrack(playlist);
+    for (const file of files) {
+      try {
+        const url = await uploadAudioFile(file);
+        list.push({ url, name: file.name });
+      } catch(e) { setStatus('Failed to upload ' + file.name + ': ' + e.message); }
+    }
+    saveSoundtrack(playlist, list);
+    renderSoundtrackList(playlist);
+    setStatus('Added track(s) to the ' + playlist + ' soundtrack');
+  } else if (mode === 'sound') {
+    const { name, kind } = audioFileInput.dataset;
+    try {
+      setStatus('Uploading ' + kind + ' sound for ' + name + '...');
+      const url = await uploadAudioFile(files[0]);
+      localStorage.setItem('sound_' + name + '_' + kind, url);
+      refreshSoundSlotUI(name, kind);
+      setStatus('Uploaded ' + kind + ' sound for ' + name);
+    } catch(e) { setStatus('Failed to upload sound: ' + e.message); }
+  }
+});
+
+// ── Soundtrack (shuffled background music) — split into a 'menu' playlist
+// (plays outside a match) and a 'gameplay' playlist (plays during one). ──
+
+function soundtrackKey(playlist) { return 'mercs_soundtrack_' + playlist; }
+
+function loadSoundtrack(playlist) {
+  try { return JSON.parse(localStorage.getItem(soundtrackKey(playlist)) || '[]'); } catch(e) { return []; }
+}
+function saveSoundtrack(playlist, list) {
+  localStorage.setItem(soundtrackKey(playlist), JSON.stringify(list));
+}
+
+function renderSoundtrackList(playlist) {
+  const container = document.getElementById('soundtrack-' + playlist + '-list');
+  if (!container) return;
+  const tracks = loadSoundtrack(playlist);
+  container.innerHTML = '';
+  if (tracks.length === 0) {
+    container.innerHTML = '<div id="soundtrack-empty">No tracks yet — add some to play shuffled ' + playlist + ' music for everyone.</div>';
+    return;
+  }
+  tracks.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'track-row';
+    const name = document.createElement('div');
+    name.className = 'track-name';
+    name.textContent = t.name || t.url;
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'btn danger';
+    removeBtn.style.cssText = 'font-size:11px; padding:3px 8px;';
+    removeBtn.textContent = '[ Remove ]';
+    removeBtn.onclick = () => {
+      const list = loadSoundtrack(playlist);
+      list.splice(i, 1);
+      saveSoundtrack(playlist, list);
+      renderSoundtrackList(playlist);
+      setStatus('Removed ' + (t.name || 'track') + ' from the ' + playlist + ' soundtrack');
+    };
+    row.appendChild(name); row.appendChild(removeBtn);
+    container.appendChild(row);
+  });
+}
+
+// ── Per-entity sound effect slots (attack / damage taken / death) ──
+// Shared by the character (name='PLAYER') and every enemy (name=enemy id).
+
+function hasSound(name, kind) {
+  return !!localStorage.getItem('sound_' + name + '_' + kind);
+}
+
+function triggerSoundUpload(name, kind) {
+  audioFileInput.multiple = false;
+  audioFileInput.dataset.mode = 'sound';
+  audioFileInput.dataset.name = name;
+  audioFileInput.dataset.kind = kind;
+  audioFileInput.value = '';
+  audioFileInput.click();
+}
+
+function clearSound(name, kind) {
+  localStorage.removeItem('sound_' + name + '_' + kind);
+  refreshSoundSlotUI(name, kind);
+  setStatus('Cleared ' + kind + ' sound for ' + name);
+}
+
+function renderSoundSlotContent(el, name, kind) {
+  const has = hasSound(name, kind);
+  el.className = 'sound-slot' + (has ? ' has-sound' : '');
+  const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+  el.innerHTML = label + (has ? ' <span class="sx" data-clear="1">✕</span>' : '');
+}
+
+function refreshSoundSlotUI(name, kind) {
+  const el = document.getElementById('sound-slot-' + name + '-' + kind);
+  if (el) renderSoundSlotContent(el, name, kind);
+}
+
+function buildSoundSlots(name, kinds) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sound-slots';
+  kinds.forEach(kind => {
+    const el = document.createElement('div');
+    el.id = 'sound-slot-' + name + '-' + kind;
+    el.title = (kind === 'damage' ? 'Damage taken' : kind.charAt(0).toUpperCase() + kind.slice(1)) + ' sound for ' + name;
+    renderSoundSlotContent(el, name, kind);
+    el.addEventListener('click', e => {
+      if (e.target.dataset.clear) { e.stopPropagation(); clearSound(name, kind); return; }
+      triggerSoundUpload(name, kind);
+    });
+    wrap.appendChild(el);
+  });
+  return wrap;
 }
 
 // === CLEAR / RESET ===
@@ -2089,6 +2300,17 @@ function applyServerConfigToLocalStorage(cfg) {
       localStorage.setItem(ANCHOR_KEY(wn), JSON.stringify(data));
     });
   }
+  if (cfg.soundtrack) {
+    if (cfg.soundtrack.menu)     localStorage.setItem(soundtrackKey('menu'), JSON.stringify(cfg.soundtrack.menu));
+    if (cfg.soundtrack.gameplay) localStorage.setItem(soundtrackKey('gameplay'), JSON.stringify(cfg.soundtrack.gameplay));
+  }
+  if (cfg.sounds) {
+    Object.entries(cfg.sounds).forEach(([name, kinds]) => {
+      Object.entries(kinds).forEach(([kind, url]) => {
+        localStorage.setItem('sound_' + name + '_' + kind, url);
+      });
+    });
+  }
 }
 
 // Bundles every devtool-controlled localStorage key into one config blob —
@@ -2133,6 +2355,31 @@ function gatherPublishConfig() {
     if (raw) { try { anchors[wn] = JSON.parse(raw); } catch(e) {} }
   });
   if (Object.keys(anchors).length) cfg.anchors = anchors;
+
+  const soundtrack = {};
+  const menuTracks = loadSoundtrack('menu');
+  const gameplayTracks = loadSoundtrack('gameplay');
+  if (menuTracks.length) soundtrack.menu = menuTracks;
+  if (gameplayTracks.length) soundtrack.gameplay = gameplayTracks;
+  if (Object.keys(soundtrack).length) cfg.soundtrack = soundtrack;
+
+  const sounds = {};
+  const soundEntities = [
+    ['PLAYER', ['damage', 'death']],
+    ...SPRITE_GROUPS.enemies.map(name => [name, ['attack', 'damage', 'death']]),
+    ...SPRITE_GROUPS.rangedWeapons.map(name => [name, ['attack']]),
+    ...SPRITE_GROUPS.meleeWeapons.map(name => [name, ['attack']]),
+    ...SPRITE_GROUPS.pickups.map(name => [name, ['spawn', 'pickup']]),
+  ];
+  soundEntities.forEach(([name, kindList]) => {
+    const kinds = {};
+    kindList.forEach(kind => {
+      const url = localStorage.getItem('sound_' + name + '_' + kind);
+      if (url) kinds[kind] = url;
+    });
+    if (Object.keys(kinds).length) sounds[name] = kinds;
+  });
+  if (Object.keys(sounds).length) cfg.sounds = sounds;
 
   return cfg;
 }
@@ -2262,6 +2509,16 @@ function initDevtool() {
   document.getElementById('btn-add-ranged').onclick = () => addWeapon('ranged');
   document.getElementById('btn-add-melee').onclick = () => addWeapon('melee');
   document.getElementById('btn-add-enemy').onclick = () => addEnemy();
+  ['menu', 'gameplay'].forEach(playlist => {
+    document.getElementById('btn-add-track-' + playlist).onclick = () => {
+      audioFileInput.multiple = true;
+      audioFileInput.dataset.mode = 'soundtrack';
+      audioFileInput.dataset.playlist = playlist;
+      audioFileInput.value = '';
+      audioFileInput.click();
+    };
+    renderSoundtrackList(playlist);
+  });
 
   rebuildUI();
 }

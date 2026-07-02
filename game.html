@@ -79,6 +79,17 @@ function applyServerConfigToLocalStorage(cfg) {
       localStorage.setItem('weapon_' + wn + '_anchor', JSON.stringify(data));
     });
   }
+  if (cfg.soundtrack) {
+    if (cfg.soundtrack.menu)     localStorage.setItem('mercs_soundtrack_menu', JSON.stringify(cfg.soundtrack.menu));
+    if (cfg.soundtrack.gameplay) localStorage.setItem('mercs_soundtrack_gameplay', JSON.stringify(cfg.soundtrack.gameplay));
+  }
+  if (cfg.sounds) {
+    Object.entries(cfg.sounds).forEach(([name, kinds]) => {
+      Object.entries(kinds).forEach(([kind, url]) => {
+        localStorage.setItem('sound_' + name + '_' + kind, url);
+      });
+    });
+  }
 }
 
 try {
@@ -441,6 +452,111 @@ const SPRITES = {
       SPRITE_FNS[fallback](ctx, w, h);
     }
     ctx.restore();
+  },
+};
+
+// Sound effects for the character (damage-taken/death), each enemy
+// (attack/damage/death), and each weapon (attack — swapping weapons via a
+// pickup mid-match changes which sound plays, so this reads localStorage
+// fresh on every call instead of caching names at boot like SPRITES does.
+const SOUNDS = {
+  play(name, kind) {
+    const url = localStorage.getItem('sound_' + name + '_' + kind);
+    if (!url) return;
+    const a = new Audio(url);
+    a.volume = getSfxVolume() / 100;
+    a.play().catch(() => {}); // ignore — autoplay can be blocked before the first user gesture
+  },
+};
+
+// Maps a pickup object's `kind` ('health'/'ammo'/'weapon') to the sound-slot
+// name devtool.html uses for it.
+function pickupSoundName(kind) {
+  if (kind === 'health') return 'PICKUP_HEALTH';
+  if (kind === 'ammo')   return 'PICKUP_AMMO';
+  if (kind === 'weapon') return 'PICKUP_WEAPON';
+  return null;
+}
+
+// Personal volume preferences (Settings screen) — local-only, like any other
+// per-device game setting, not part of the devtool-published config.
+function getMusicVolume() {
+  const v = parseInt(localStorage.getItem('mercs_music_volume'));
+  return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 70;
+}
+function setMusicVolume(v) {
+  v = Math.max(0, Math.min(100, v));
+  localStorage.setItem('mercs_music_volume', v);
+  if (Music.current) Music.current.volume = v / 100;
+}
+function getSfxVolume() {
+  const v = parseInt(localStorage.getItem('mercs_sfx_volume'));
+  return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 70;
+}
+function setSfxVolume(v) {
+  v = Math.max(0, Math.min(100, v));
+  localStorage.setItem('mercs_sfx_volume', v);
+}
+
+// Shuffled background music from the devtool-published soundtrack, split
+// into a 'menu' playlist (plays outside a match) and a 'gameplay' playlist
+// (plays during one). Starts on the first user interaction (browsers block
+// audio autoplay before that); update() is polled once/frame from the main
+// loop and swaps playlists the moment STATE crosses the menu/gameplay line.
+const Music = {
+  menuTracks: [],
+  gameplayTracks: [],
+  menuQueue: [],
+  gameplayQueue: [],
+  current: null,
+  currentMode: null, // 'menu' | 'gameplay' | null (not started yet)
+  started: false,
+
+  load() {
+    try { this.menuTracks = JSON.parse(localStorage.getItem('mercs_soundtrack_menu') || '[]'); } catch(e) { this.menuTracks = []; }
+    try { this.gameplayTracks = JSON.parse(localStorage.getItem('mercs_soundtrack_gameplay') || '[]'); } catch(e) { this.gameplayTracks = []; }
+  },
+
+  start() {
+    if (this.started) return;
+    this.started = true;
+    this._switchTo(this._modeForState());
+  },
+
+  update() {
+    if (!this.started) return;
+    const desired = this._modeForState();
+    if (desired !== this.currentMode) this._switchTo(desired);
+  },
+
+  _modeForState() {
+    return (STATE === 'playing' || STATE === 'mpPlaying') ? 'gameplay' : 'menu';
+  },
+
+  _tracksFor(mode) { return mode === 'gameplay' ? this.gameplayTracks : this.menuTracks; },
+  _queueFor(mode)  { return mode === 'gameplay' ? this.gameplayQueue  : this.menuQueue; },
+  _setQueueFor(mode, q) { if (mode === 'gameplay') this.gameplayQueue = q; else this.menuQueue = q; },
+
+  _switchTo(mode) {
+    this.currentMode = mode;
+    if (this.current) { this.current.onended = null; this.current.pause(); this.current = null; }
+    if (this._tracksFor(mode).length === 0) return; // nothing to play for this mode
+    this._playNext(mode);
+  },
+
+  _playNext(mode) {
+    let queue = this._queueFor(mode);
+    if (queue.length === 0) {
+      queue = this._tracksFor(mode).slice().sort(() => Math.random() - 0.5);
+      this._setQueueFor(mode, queue);
+    }
+    const track = queue.shift();
+    if (!track) return;
+    const audio = new Audio(track.url);
+    audio.volume = getMusicVolume() / 100;
+    audio.onended = () => { if (this.currentMode === mode) this._playNext(mode); };
+    audio.play().catch(() => {});
+    this.current = audio;
   },
 };
 
@@ -1082,8 +1198,11 @@ function updateEnemies(dt) {
         player.hp -= e.def.dmg;
         player.flashTimer = 0.15;
         player.invincible = 0.5;
+        SOUNDS.play(e.type, 'attack');
+        SOUNDS.play('PLAYER', 'damage');
         if (player.hp <= 0) {
           player.hp = 0;
+          SOUNDS.play('PLAYER', 'death');
           if (STATE === 'mpPlaying') goDowned(); else endGame();
         }
       }
@@ -1135,6 +1254,7 @@ function drawEnemies(ctx) {
 // score/combo globals exactly as before.
 function killEnemy(e, isMelee, killerId) {
   e.deathTimer = 0;
+  SOUNDS.play(e.type, 'death');
   const mp = STATE === 'mpPlaying';
 
   const milestones = {5:'GOOD!', 10:'GREAT!!', 20:'EXCELLENT!!!', 30:'★ LEGENDARY ★'};
@@ -1177,13 +1297,16 @@ function killEnemy(e, isMelee, killerId) {
   const ph = CONFIG.PICKUP_HEALTH, pa = CONFIG.PICKUP_AMMO, pw = CONFIG.PICKUP_WEAPON;
   if (roll < ph.dropChance) {
     pickups.push({ id: nextPickupId++, kind:'health', x: e.x, y: e.y, amount: ph.healMin + Math.floor(Math.random()*(ph.healMax - ph.healMin + 1)), timer:0 });
+    SOUNDS.play('PICKUP_HEALTH', 'spawn');
   } else if (roll < ph.dropChance + pa.dropChance) {
     pickups.push({ id: nextPickupId++, kind:'ammo',   x: e.x, y: e.y, amount: pa.amountMin + Math.floor(Math.random()*(pa.amountMax - pa.amountMin + 1)), timer:0 });
+    SOUNDS.play('PICKUP_AMMO', 'spawn');
   } else if (roll < ph.dropChance + pa.dropChance + pw.dropChance) {
     const pool = lootPoolEntries();
     if (pool.length > 0) {
       const drop = pool[Math.floor(Math.random() * pool.length)];
       pickups.push({ id: nextPickupId++, kind:'weapon', x: e.x, y: e.y, timer:0, weaponName: drop.name, category: drop.category });
+      SOUNDS.play('PICKUP_WEAPON', 'spawn');
     }
   }
 
@@ -1212,6 +1335,7 @@ function killEnemy(e, isMelee, killerId) {
 function applyDamageToEnemy(e, dmg, isMelee, killerId) {
   e.hp -= dmg;
   e.flashTimer = isMelee ? 0.1 : 0.06;
+  SOUNDS.play(e.type, 'damage');
   if (e.hp <= 0) killEnemy(e, isMelee, killerId);
 }
 
@@ -1220,6 +1344,7 @@ function applyDamageToEnemy(e, dmg, isMelee, killerId) {
 function spawnBullet() {
   if (player.mag <= 0) return;
   player.mag--; // one trigger pull consumes one round, regardless of pellet count
+  SOUNDS.play(EQUIPPED_RANGED.name, 'attack');
   const aimAngle = player.rawAngle;
   const anchor = HAND_ANCHORS[player.facing];
   const originX = player.x + anchor.x + Math.cos(aimAngle) * GUN_LENGTH;
@@ -1258,6 +1383,7 @@ function updateBullets(dt) {
         if (STATE === 'mpPlaying' && !isHost) {
           // Optimistic local feedback only — the host resolves the real hp/kill.
           e.flashTimer = 0.06;
+          SOUNDS.play(e.type, 'damage');
           Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
         } else {
           applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
@@ -1287,6 +1413,7 @@ function drawBullets(ctx) {
 function doMelee() {
   player.meleeCd = EQUIPPED_MELEE.meleeCd;
   player.flashTimer = 0.08;
+  SOUNDS.play(EQUIPPED_MELEE.name, 'attack');
   const aimAngle = player.rawAngle;
   for (const e of enemies) {
     if (e.deathTimer >= 0) continue;
@@ -1299,6 +1426,7 @@ function doMelee() {
     if (Math.abs(diff) < MELEE_ARC/2) {
       if (STATE === 'mpPlaying' && !isHost) {
         e.flashTimer = 0.1;
+        SOUNDS.play(e.type, 'damage');
         Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_MELEE.meleeDmg, isMelee: true });
       } else {
         applyDamageToEnemy(e, EQUIPPED_MELEE.meleeDmg, true, Net.playerId);
@@ -1327,6 +1455,7 @@ function updatePickups(dt) {
     if (p.timer > 8) { pickups.splice(i, 1); continue; }
     const dist = Math.hypot(player.x - p.x, player.y - p.y);
     if (dist < 18) {
+      SOUNDS.play(pickupSoundName(p.kind), 'pickup');
       if (p.kind === 'health') {
         player.hp = Math.min(player.hp + p.amount, player.maxHp);
         spawnFlash('+' + p.amount + ' HP', p.x, p.y - 10, '#f04060');
@@ -1828,8 +1957,17 @@ Net.on('state', msg => {
     rp.character = msg.data.character || null;
     if (rp.x === undefined) { rp.x = msg.data.x; rp.y = msg.data.y; }
   } else if (msg.kind === 'enemies' && !isHost) {
+    // killEnemy() only ever runs on the host — detect enemies that just went
+    // from alive to dead in this snapshot so non-host clients still get a
+    // death sound instead of just the silent dissolve animation.
+    const wasDead = new Set(enemies.filter(e => e.deathTimer >= 0).map(e => e.id));
+    msg.data.forEach(d => { if (d.deathTimer >= 0 && !wasDead.has(d.id)) SOUNDS.play(d.type, 'death'); });
     enemies = msg.data.map(d => Object.assign({}, d, { def: ENEMY_DEFS[d.type] || ENEMY_DEFS.ENEMY_BASIC }));
   } else if (msg.kind === 'pickups' && !isHost) {
+    // Same idea as the enemy-death diff above — pickups only ever spawn on
+    // the host, so detect newly-appeared ones here to play a spawn sound.
+    const hadIds = new Set(pickups.map(p => p.id));
+    msg.data.forEach(d => { if (!hadIds.has(d.id)) SOUNDS.play(pickupSoundName(d.kind), 'spawn'); });
     pickups = msg.data.map(d => Object.assign({}, d));
   } else if (msg.kind === 'timer' && !isHost) {
     mainTimer = msg.data.mainTimer; elapsed = msg.data.elapsed;
@@ -2055,6 +2193,36 @@ function drawStartScreen(ctx) {
   ctx.textAlign = 'left';
 }
 
+// One volume row: a label, a [-]/[+] pair, and a filled bar showing the
+// current 0-100 value. get()/set() are the getMusicVolume/setMusicVolume-
+// style pair for whichever slider this row controls.
+function drawVolumeRow(ctx, y, label, get, set) {
+  const rowCenterX = CW/2, barW = 160, barH = 14, step = 10;
+  const value = get();
+
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#8a88a0'; ctx.font = '16px VT323, monospace';
+  ctx.fillText(label, rowCenterX - 90, y + 5);
+
+  const minusX = rowCenterX - 78;
+  uiButton(ctx, minusX, y - 13, 26, 26, '-', () => set(value - step), { font: '16px VT323, monospace' });
+
+  const barX = minusX + 34;
+  ctx.fillStyle = '#1a1a2a';
+  ctx.fillRect(barX, y - 6, barW, barH);
+  ctx.fillStyle = value > 0 ? '#3ef83e' : '#3a384e';
+  ctx.fillRect(barX, y - 6, Math.round(barW * value / 100), barH);
+  ctx.strokeStyle = '#3a384e'; ctx.lineWidth = 1;
+  ctx.strokeRect(barX + 0.5, y - 5.5, barW - 1, barH - 1);
+
+  const plusX = barX + barW + 10;
+  uiButton(ctx, plusX, y - 13, 26, 26, '+', () => set(value + step), { font: '16px VT323, monospace' });
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#c8c6e0'; ctx.font = '14px VT323, monospace';
+  ctx.fillText(value + '%', plusX + 34, y + 5);
+}
+
 function drawSettingsScreen(ctx) {
   ctx.fillStyle = 'rgba(0,0,0,0.90)';
   ctx.fillRect(0,0,CW,CH);
@@ -2062,13 +2230,12 @@ function drawSettingsScreen(ctx) {
 
   ctx.fillStyle = '#3ef83e';
   ctx.font = '48px VT323, monospace';
-  ctx.fillText('SETTINGS', CW/2, CH/2 - 80);
+  ctx.fillText('SETTINGS', CW/2, CH/2 - 100);
 
-  ctx.fillStyle = '#8a88a0';
-  ctx.font = '18px VT323, monospace';
-  ctx.fillText('More options are coming soon.', CW/2, CH/2 - 20);
+  drawVolumeRow(ctx, CH/2 - 30, 'MUSIC VOLUME', getMusicVolume, setMusicVolume);
+  drawVolumeRow(ctx, CH/2 + 20, 'SFX VOLUME',   getSfxVolume,   setSfxVolume);
 
-  const bw = 180, bh = 44, bx = CW/2 - bw/2, by = CH/2 + 20;
+  const bw = 180, bh = 44, bx = CW/2 - bw/2, by = CH/2 + 70;
   uiButton(ctx, bx, by, bw, bh, '[ BACK ]', () => { STATE = 'start'; });
   ctx.textAlign = 'left';
 }
@@ -2520,6 +2687,7 @@ function loop(now) {
   uiButtons = []; // repopulated by whichever menu screen draws this frame
 
   SPRITES.updateAnims(dt);
+  Music.update();
 
   const mpActive = STATE === 'mpPlaying';
   if (STATE === 'playing' || mpActive) {
@@ -2571,8 +2739,10 @@ function loop(now) {
 // === INIT ===
 
 SPRITES.load();
+Music.load();
 
 canvas.addEventListener('click', e => {
+  Music.start(); // first user gesture on the page — browsers block audio autoplay before this
   const r = canvas.getBoundingClientRect();
   const cx = (e.clientX - r.left) * (CW / r.width);
   const cy = (e.clientY - r.top)  * (CH / r.height);
@@ -2581,6 +2751,7 @@ canvas.addEventListener('click', e => {
   if (STATE === 'dead' || STATE === 'leaderboard') startGame();
 });
 window.addEventListener('keydown', e => {
+  Music.start();
   if (TextEntry.active) { TextEntry.handleKey(e); return; }
   if (STATE === 'enterInitials' || STATE === 'mpEnterInitials') { handleInitialsKey(e); return; }
   if (STATE === 'leaderboard') {
