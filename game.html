@@ -2178,6 +2178,14 @@ function drawMpBrowseScreen(ctx) {
   rowY += bh + 12;
   uiButton(ctx, bx, rowY, bw, 40, '[ EDIT CHARACTER ]', () => { window.open('character-editor.html', '_blank'); });
   rowY += 40 + 12;
+  uiButton(ctx, bx, rowY, bw, 40, '[ LEADERBOARD ]', () => {
+    justSavedIndex = -1;
+    STATE = 'mpLeaderboard';
+    mpLeaderboardEntries = [];
+    mpLeaderboardLoading = true;
+    loadLeaderboard(LB_BOARD_MP).then(entries => { mpLeaderboardEntries = entries; mpLeaderboardLoading = false; });
+  });
+  rowY += 40 + 12;
   uiButton(ctx, bx, rowY, bw, 40, '[ BACK ]', () => { Net.close(); STATE = 'start'; });
 
   if (mpErrorMsg && Date.now() < mpErrorUntil) {
