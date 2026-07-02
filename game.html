@@ -717,6 +717,167 @@ function updatePlayer(dt) {
   if (player.invincible > 0) player.invincible -= dt;
 }
 
+// Mirrors character-editor.html's genDrawCharacter — this page is standalone
+// (no shared JS module system in this project). Renders a player's MP-only
+// custom look procedurally from their small saved param object, instead of
+// the shared PLAYER_* sprites SPRITES.draw() reads.
+function genDrawCharacter(ctx, w, h, dir, state) {
+  const sf = w / 22;
+  const fill = (col, x, y, bw, bh) => {
+    ctx.fillStyle = col;
+    ctx.fillRect(Math.round(x*sf), Math.round(y*sf), Math.max(1,Math.round(bw*sf)), Math.max(1,Math.round(bh*sf)));
+  };
+  const oval = (col, ecx, ecy, rx, ry) => {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.ellipse(Math.round(ecx*sf), Math.round(ecy*sf), Math.max(1,Math.round(rx*sf)), Math.max(1,Math.round(ry*sf)), 0,0,Math.PI*2);
+    ctx.fill();
+  };
+
+  const toRight = ['E','SE','NE'].includes(dir);
+  const front   = ['S','SE','SW'].includes(dir);
+  const back    = ['N','NE','NW'].includes(dir);
+  const side    = dir === 'E' || dir === 'W';
+  const diagF   = dir === 'SE' || dir === 'SW';
+  const diagB   = dir === 'NE' || dir === 'NW';
+
+  const build = Math.max(0, Math.min(2, state.build || 1));
+  const bw  = 7 + build;
+  const scx = 11;
+  const bl  = Math.floor(scx - bw / 2);
+  const br  = bl + bw;
+
+  const HCY = 4.5;
+  const HRX = side ? 3 : 3.5;
+  const HRY = 3.5;
+  const HCX = side        ? (toRight ? scx+1   : scx-1)
+            : (diagF||diagB) ? (toRight ? scx+0.5 : scx-0.5)
+            : scx;
+
+  const BT=9, BH=6, BB=15;
+  const AW=2, AH=5;
+
+  const LT=BB, LH=5, BH2=2;
+  const LG  = side ? 0 : 2;
+  const LLW = Math.floor((bw-LG)/2);
+  const RLW = bw-LG-LLW;
+  const RLX = bl+LLW+LG;
+
+  if (side) {
+    fill(state.pants, bl,  LT,         bw, LH-BH2);
+    fill(state.boots, bl,  LT+LH-BH2, bw, BH2);
+  } else {
+    fill(state.pants, bl,  LT,         LLW, LH-BH2);
+    fill(state.pants, RLX, LT,         RLW, LH-BH2);
+    fill(state.boots, bl,  LT+LH-BH2, LLW, BH2);
+    fill(state.boots, RLX, LT+LH-BH2, RLW, BH2);
+  }
+
+  if (state.backpack && side) {
+    const bpx = toRight ? bl-2.5 : br+0.5;
+    fill('#5a4830', bpx,     BT+0.5, 2.5, BH*0.8);
+    fill('#8a6840', bpx+0.5, BT+1,   1.5, BH*0.6);
+  }
+
+  if (side) {
+    const bax = toRight ? bl-AW : br;
+    fill(state.primary, bax, BT+1, AW, 3);
+    fill(state.skin,    bax, BT+4, AW, AH-4);
+  } else {
+    fill(state.primary, bl-AW, BT,   AW, 3);
+    fill(state.skin,    bl-AW, BT+3, AW, AH-3);
+    fill(state.primary, br,    BT,   AW, 3);
+    fill(state.skin,    br,    BT+3, AW, AH-3);
+  }
+
+  fill(state.primary, bl, BT, bw, BH);
+  const mx = bl + bw/2;
+  if (state.outfitStyle === 'vest') {
+    fill(state.accent,  bl,   BT,     bw,   1.5);
+    fill(state.accent,  bl+1, BT,     1,    BH);
+    fill(state.accent,  br-2, BT,     1,    BH);
+    fill(state.primary, bl+2, BT+1.5, bw-4, BH-1.5);
+  } else if (state.outfitStyle === 'jacket') {
+    fill(state.accent, bl,     BT,     bw, 1.5);
+    fill(state.accent, mx-0.5, BT+1.5, 1,  BH-1.5);
+  } else if (state.outfitStyle === 'hoodie') {
+    fill(state.accent, bl,   BT, bw, 2.5);
+    fill(state.accent, bl,   BT, 1,  BH);
+    fill(state.accent, br-1, BT, 1,  BH);
+  } else if (state.outfitStyle === 'armor') {
+    fill(state.accent, bl,   BT,                  bw,   1);
+    fill(state.accent, bl,   BT,                  1,    BH);
+    fill(state.accent, br-1, BT,                  1,    BH);
+    fill(state.accent, bl+1, BT+Math.floor(BH/2), bw-2, 1);
+  }
+  if (state.belt) {
+    fill('#5a4830', bl, BB-1.5, bw, 1.5);
+    if (w >= 32) fill('#c8a840', mx-1, BB-1.5, 2, 1.5);
+  }
+
+  if (state.backpack) {
+    if (back) {
+      fill('#5a4830', bl-0.5, BT+0.5, bw+1, BH*0.85);
+      fill('#8a6840', bl,     BT+1,   bw,   BH*0.65);
+    } else if (front) {
+      fill('#5a4830', bl+1, BT, 1, BH);
+      fill('#5a4830', br-2, BT, 1, BH);
+    }
+  }
+
+  if (side) {
+    const fax = toRight ? br : bl-AW;
+    fill(state.primary, fax, BT,   AW, 3);
+    fill(state.skin,    fax, BT+3, AW, AH-3);
+  }
+
+  if (front || side || diagF) {
+    fill(state.helmet ? '#3a3a3a' : state.skin, HCX-1, BT-2, 2, 2);
+  }
+
+  if (state.helmet) {
+    oval('#555555', HCX, HCY, HRX+0.5, HRY+0.5);
+    if (front || side || diagF) fill('#2a2a3a', HCX-2, HCY+0.5, 4, 1.5);
+  } else {
+    oval(state.skin, HCX, HCY, HRX, HRY);
+
+    if (state.hairStyle === 'short') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+    } else if (state.hairStyle === 'long') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+      fill(state.hairColor, HCX-HRX+0.5, HCY+HRY*0.4, HRX*2-1, 4);
+    } else if (state.hairStyle === 'mohawk') {
+      fill(state.hairColor, HCX-0.5, HCY-HRY-2.5, 1.5, HRY+2);
+    } else if (state.hairStyle === 'buzz') {
+      oval(state.hairColor, HCX, HCY-HRY*0.2, HRX, HRY*0.5);
+    } else if (state.hairStyle === 'pony') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+      const ptX = back ? HCX-HRX+0.5 : HCX+HRX-1.5;
+      fill(state.hairColor, ptX-0.5, HCY-0.5, 1.5, 6);
+    }
+
+    if (front) {
+      fill('#1a1a2a', HCX-2.5, HCY+0.5, 1.5, 1.5);
+      fill('#1a1a2a', HCX+1,   HCY+0.5, 1.5, 1.5);
+    } else if (diagF) {
+      fill('#1a1a2a', HCX-2,   HCY+0.5, 1.5, 1.5);
+      fill('#1a1a2a', HCX+0.5, HCY+0.5, 1,   1);
+    } else if (side) {
+      const ex = toRight ? HCX+1.5 : HCX-3;
+      fill('#1a1a2a', ex, HCY+0.5, 1.5, 1.5);
+    }
+  }
+}
+
+// Same (cx,cy)-centered convention as SPRITES.draw, so custom characters
+// drop in as a straight substitute wherever a PLAYER_* sprite would render.
+function drawCharacterAt(ctx, state, cx, cy, w, h, dir) {
+  ctx.save();
+  ctx.translate(cx - w/2, cy - h/2);
+  genDrawCharacter(ctx, w, h, dir, state);
+  ctx.restore();
+}
+
 function drawPlayer(ctx) {
   const anchor = HAND_ANCHORS[player.facing];
   const handX = player.x + anchor.x;
@@ -733,7 +894,11 @@ function drawPlayer(ctx) {
   ctx.save();
   if (STATE === 'mpPlaying' && mpDowned) ctx.globalAlpha = 0.35;
   if (behind) _drawWeapon(ctx, handX, handY, player.rawAngle);
-  SPRITES.draw('PLAYER_' + player.facing, ctx, player.x, player.y, PLAYER_SIZE, PLAYER_SIZE, 0);
+  if (STATE === 'mpPlaying' && myCharacter) {
+    drawCharacterAt(ctx, myCharacter, player.x, player.y, PLAYER_SIZE, PLAYER_SIZE, player.facing);
+  } else {
+    SPRITES.draw('PLAYER_' + player.facing, ctx, player.x, player.y, PLAYER_SIZE, PLAYER_SIZE, 0);
+  }
   if (!behind) _drawWeapon(ctx, handX, handY, player.rawAngle);
   ctx.restore();
 
@@ -1530,8 +1695,19 @@ let mpErrorUntil = 0;
 // mirrors. `isHost` decides who simulates enemies/pickups/timer for real;
 // everyone else just renders the host's broadcasts.
 let isHost = false;
-let remotePlayers = new Map(); // id -> { name, x, y, targetX, targetY, facing, hp, maxHp, weaponName }
+let remotePlayers = new Map(); // id -> { name, x, y, targetX, targetY, facing, hp, maxHp, weaponName, character }
 let playerScores = {};         // id -> { name, score } — host-authoritative, per-player
+// This player's own character-editor.html customization (build/colors/outfit
+// params), if any — MP-only per-player cosmetic, not published to everyone
+// like devtool's sprites. Broadcast to teammates so they see it too; loaded
+// fresh at each match start in case it changed since the last one.
+let myCharacter = null;
+function loadMyCharacter() {
+  try {
+    const raw = localStorage.getItem('mercs_my_character');
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
 // Combo is a shared team streak in MP (any player's kill extends it), unlike
 // single-player's per-run combo/comboTimer above — host-authoritative, broadcast
 // to everyone alongside scores.
@@ -1560,6 +1736,7 @@ Net.on('state', msg => {
     rp.targetX = msg.data.x; rp.targetY = msg.data.y;
     rp.facing = msg.data.facing; rp.hp = msg.data.hp; rp.maxHp = msg.data.maxHp;
     rp.weaponName = msg.data.weaponName;
+    rp.character = msg.data.character || null;
     if (rp.x === undefined) { rp.x = msg.data.x; rp.y = msg.data.y; }
   } else if (msg.kind === 'enemies' && !isHost) {
     enemies = msg.data.map(d => Object.assign({}, d, { def: ENEMY_DEFS[d.type] || ENEMY_DEFS.ENEMY_BASIC }));
@@ -1625,6 +1802,7 @@ function startMultiplayerMatch(msg) {
   nextEnemyId = 1; nextPickupId = 1;
   netBroadcastTimer = 0;
   mpDowned = false;
+  myCharacter = loadMyCharacter();
 
   remotePlayers = new Map();
   playerScores = {};
@@ -1633,7 +1811,7 @@ function startMultiplayerMatch(msg) {
   msg.players.forEach(p => {
     playerScores[p.id] = { name: p.name, score: 0 };
     if (p.id !== Net.playerId) {
-      remotePlayers.set(p.id, { name: p.name, x: undefined, y: undefined, facing: 'S', hp: 100, maxHp: 100, weaponName: 'WEAPON_PISTOL' });
+      remotePlayers.set(p.id, { name: p.name, x: undefined, y: undefined, facing: 'S', hp: 100, maxHp: 100, weaponName: 'WEAPON_PISTOL', character: null });
     }
   });
 
@@ -1678,7 +1856,11 @@ function updateRemotePlayers(dt) {
 function drawRemotePlayers(ctx) {
   remotePlayers.forEach(rp => {
     if (rp.x === undefined || rp.hp <= 0) return;
-    SPRITES.draw('PLAYER_' + (rp.facing || 'S'), ctx, rp.x, rp.y, PLAYER_SIZE, PLAYER_SIZE, 0);
+    if (rp.character) {
+      drawCharacterAt(ctx, rp.character, rp.x, rp.y, PLAYER_SIZE, PLAYER_SIZE, rp.facing || 'S');
+    } else {
+      SPRITES.draw('PLAYER_' + (rp.facing || 'S'), ctx, rp.x, rp.y, PLAYER_SIZE, PLAYER_SIZE, 0);
+    }
     ctx.fillStyle = '#8a88a0';
     ctx.font = '11px VT323, monospace';
     ctx.textAlign = 'center';
@@ -1697,7 +1879,7 @@ function updateMultiplayerNet(dt) {
   Net.send('state', { kind: 'player', data: {
     x: player.x, y: player.y, facing: player.facing,
     hp: mpDowned ? 0 : player.hp, maxHp: player.maxHp,
-    weaponName: EQUIPPED_RANGED.name,
+    weaponName: EQUIPPED_RANGED.name, character: myCharacter,
   }});
 
   if (isHost) {
@@ -1904,6 +2086,8 @@ function drawMpBrowseScreen(ctx) {
     }, () => {});
   });
   rowY += bh + 12;
+  uiButton(ctx, bx, rowY, bw, 40, '[ EDIT CHARACTER ]', () => { window.open('character-editor.html', '_blank'); });
+  rowY += 40 + 12;
   uiButton(ctx, bx, rowY, bw, 40, '[ BACK ]', () => { Net.close(); STATE = 'start'; });
 
   if (mpErrorMsg && Date.now() < mpErrorUntil) {

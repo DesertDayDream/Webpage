@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MERCS — Character Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0d0b12;
+    --surface:  #13111c;
+    --surface2: #1a1826;
+    --border:   #2e2c40;
+    --border2:  #3e3c58;
+    --green:    #3ef83e;
+    --green-dim:#1a6e1a;
+    --amber:    #c8a840;
+    --red:      #c84040;
+    --text:     #c8c6e0;
+    --text-dim: #5a5870;
+    --mono:     'Share Tech Mono', 'Courier New', monospace;
+    --vt:       'VT323', monospace;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:var(--mono); font-size:13px; min-height:100vh; }
+
+  #topbar {
+    background:var(--surface); border-bottom:1px solid var(--border);
+    padding:10px 20px; display:flex; align-items:center; gap:20px;
+  }
+  #topbar .logo { font-family:var(--vt); font-size:22px; color:var(--green); letter-spacing:2px; }
+  #topbar .sub  { color:var(--text-dim); font-size:11px; }
+  #topbar .spacer { flex:1; }
+  .btn {
+    font-family:var(--mono); font-size:12px; color:var(--text);
+    background:var(--surface2); border:1px solid var(--border2);
+    padding:5px 14px; cursor:pointer; letter-spacing:1px;
+    transition: border-color .15s, color .15s;
+  }
+  .btn:hover { border-color:var(--green); color:var(--green); }
+  .btn.primary { border-color:var(--green); color:var(--green); }
+  .btn.primary:hover { background:var(--green-dim); }
+  .btn.danger { border-color:var(--red); color:var(--red); }
+  .btn.danger:hover { background:rgba(200,64,64,.15); }
+
+  /* ── COMPASS ROSE ── */
+  .compass-rose { display:grid; grid-template-columns:repeat(3,72px); gap:4px; margin-bottom:12px; }
+  .compass-cell {
+    width:72px; height:72px; background:var(--surface); border:1px solid var(--border);
+    cursor:pointer; display:flex; align-items:center; justify-content:center;
+    position:relative; overflow:hidden;
+  }
+  .compass-cell:hover { border-color:var(--border2); }
+  .compass-cell.active { border-color:var(--green) !important; background:rgba(62,248,62,.05); box-shadow:0 0 0 1px var(--green); }
+  .compass-cell canvas { display:block; image-rendering:pixelated; }
+  .compass-cell .dir-label { position:absolute; bottom:2px; left:0; right:0; text-align:center; font-size:9px; color:var(--text-dim); pointer-events:none; }
+  .compass-center { background:var(--bg); border:1px solid var(--border); cursor:default; }
+  .compass-center:hover { border-color:var(--border); }
+
+  /* ── GENERATOR PANEL — same builder as devtool.html's character generator,
+     just laid out as the whole page instead of a modal overlay ── */
+  #gen-box {
+    background:var(--surface); border:1px solid var(--border2);
+    display:flex; flex-direction:column; width:100%; max-width:700px; margin:24px auto;
+  }
+  #gen-topbar {
+    background:var(--bg); border-bottom:1px solid var(--border);
+    padding:10px 16px; display:flex; align-items:center; gap:10px; flex-shrink:0;
+  }
+  .gen-title { font-family:var(--vt); font-size:20px; color:var(--green); letter-spacing:2px; flex:1; }
+  #gen-body { display:flex; gap:0; flex-wrap:wrap; }
+  #gen-main { padding:16px; display:flex; flex-direction:column; align-items:flex-start; gap:8px; flex-shrink:0; }
+  #gen-compass { grid-template-columns:repeat(3,64px); }
+  #gen-compass .compass-cell { width:64px; height:64px; }
+  #gen-detail-canvas { display:block; image-rendering:pixelated; border:1px solid var(--border2); background:#0d0b12; }
+  #gen-right {
+    width:260px; border-left:1px solid var(--border); padding:12px;
+    display:flex; flex-direction:column; gap:6px; flex-shrink:0;
+  }
+  .gen-section { font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-top:6px; border-bottom:1px solid var(--border); padding-bottom:3px; }
+  .gen-row { display:flex; align-items:center; gap:8px; }
+  .gen-label { font-size:11px; color:var(--text-dim); min-width:54px; }
+  .gen-build-lbl { font-size:11px; color:var(--amber); min-width:48px; }
+  .gen-presets { display:flex; gap:6px; flex-wrap:wrap; }
+  .gen-presets .btn { font-size:11px; padding:3px 8px; }
+  .gen-swatches { display:flex; gap:5px; margin-top:2px; }
+  .gen-swatch { width:22px; height:22px; border:1px solid var(--border2); cursor:pointer; }
+  .gen-swatch:hover { outline:2px solid var(--green); outline-offset:1px; }
+  .gen-checkbox-row { display:flex; align-items:center; gap:8px; font-size:11px; }
+  .gen-checkbox-row input[type=checkbox] { accent-color:var(--green); }
+
+  #status-msg { font-size:11px; color:var(--green); min-height:16px; padding:0 0 16px; text-align:center; }
+
+  #name-panel {
+    background:var(--surface); border:1px solid var(--border2);
+    display:flex; align-items:center; gap:10px;
+    width:100%; max-width:700px; margin:24px auto 0; padding:12px 16px;
+  }
+  #name-panel label { font-size:11px; color:var(--text-dim); letter-spacing:1px; white-space:nowrap; }
+  #name-panel input {
+    flex:1; background:var(--surface2); border:1px solid var(--border2); color:var(--text);
+    font-family:var(--mono); font-size:13px; padding:6px 10px;
+  }
+  #name-panel input:focus { outline:none; border-color:var(--green); }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo">MERCS</div>
+  <div class="sub">&gt; character_editor.exe — your name and look, visible to teammates in multiplayer only</div>
+  <div class="spacer"></div>
+  <button class="btn danger" id="btn-reset">[ Reset to Default ]</button>
+  <button class="btn danger" id="btn-close-tab">[ Close Tab ]</button>
+</div>
+
+<div id="name-panel">
+  <label for="player-name-input">PLAYER NAME</label>
+  <input type="text" id="player-name-input" maxlength="20" placeholder="Player">
+</div>
+
+<div id="gen-mount"></div>
+<div id="status-msg"></div>
+
+<script>
+'use strict';
+
+const MY_CHARACTER_KEY = 'mercs_my_character';
+const PLAYER_NAME_KEY  = 'mercs_player_name'; // same key game.html's mpPlayerName() reads
+
+// === CHARACTER GENERATOR (mirrors devtool.html's — this page is standalone,
+// no shared JS module system in this project) ===
+//
+// Unlike devtool.html's generator, which bakes the result into 8 PNGs
+// published to everyone (sprite_PLAYER_*), this page saves the small
+// parameter object itself. game.html re-draws it procedurally via the same
+// genDrawCharacter() (duplicated there too) and broadcasts just these params
+// to teammates in multiplayer — far cheaper than shipping images around.
+
+const GEN_PRESETS = {
+  soldier: { outfitStyle:'vest',   helmet:true,  backpack:false, skin:'#c8956c', hairStyle:'short', hairColor:'#2a1a0a', build:1, primary:'#3a5a8a', accent:'#2a3a5a', pants:'#3a3a3a', boots:'#1a1a1a', belt:true  },
+  scout:   { outfitStyle:'hoodie', helmet:false, backpack:true,  skin:'#f0d8b0', hairStyle:'pony',  hairColor:'#2a1a0a', build:0, primary:'#3a5a8a', accent:'#2a3a5a', pants:'#3a3a3a', boots:'#1a1a1a', belt:true  },
+  heavy:   { outfitStyle:'armor',  helmet:true,  backpack:false, skin:'#a06a40', hairStyle:'none',  hairColor:'#2a1a0a', build:2, primary:'#3a5a8a', accent:'#2a3a5a', pants:'#3a3a3a', boots:'#1a1a1a', belt:true  },
+};
+
+let genCompassSelected = 'S';
+const GEN_RES = 22; // matches game.html's PLAYER sprite size — no resolution choice needed here
+
+function getGenState() {
+  const buildVal = parseInt(document.getElementById('gen-build')?.value ?? '1');
+  const builds = ['slim','average','bulky'];
+  const lbl = document.getElementById('gen-build-lbl');
+  if (lbl) lbl.textContent = builds[Math.min(2, buildVal)] || 'average';
+  return {
+    build:       buildVal,
+    skin:        document.getElementById('gen-skin')?.value         || '#c8956c',
+    hairStyle:   document.getElementById('gen-hair-style')?.value   || 'short',
+    hairColor:   document.getElementById('gen-hair-color')?.value   || '#2a1a0a',
+    outfitStyle: document.getElementById('gen-outfit-style')?.value || 'vest',
+    primary:     document.getElementById('gen-primary')?.value      || '#3a5a8a',
+    accent:      document.getElementById('gen-accent')?.value       || '#2a3a5a',
+    pants:       document.getElementById('gen-pants')?.value        || '#3a3a3a',
+    boots:       document.getElementById('gen-boots')?.value        || '#1a1a1a',
+    helmet:      !!(document.getElementById('gen-helmet')?.checked),
+    backpack:    !!(document.getElementById('gen-backpack')?.checked),
+    belt:        document.getElementById('gen-belt') ? !!(document.getElementById('gen-belt').checked) : true,
+  };
+}
+
+function genDrawCharacter(ctx, w, h, dir, state) {
+  // RPG-style 3/4 view: head at top, torso in middle, legs at bottom.
+  // Direction controls head offset, face visibility, and arm/leg layout.
+  const sf = w / 22;
+  const fill = (col, x, y, bw, bh) => {
+    ctx.fillStyle = col;
+    ctx.fillRect(Math.round(x*sf), Math.round(y*sf), Math.max(1,Math.round(bw*sf)), Math.max(1,Math.round(bh*sf)));
+  };
+  const oval = (col, ecx, ecy, rx, ry) => {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.ellipse(Math.round(ecx*sf), Math.round(ecy*sf), Math.max(1,Math.round(rx*sf)), Math.max(1,Math.round(ry*sf)), 0,0,Math.PI*2);
+    ctx.fill();
+  };
+
+  const toRight = ['E','SE','NE'].includes(dir);
+  const front   = ['S','SE','SW'].includes(dir);
+  const back    = ['N','NE','NW'].includes(dir);
+  const side    = dir === 'E' || dir === 'W';
+  const diagF   = dir === 'SE' || dir === 'SW';
+  const diagB   = dir === 'NE' || dir === 'NW';
+
+  const build = Math.max(0, Math.min(2, state.build || 1));
+  const bw  = 7 + build;          // body width: 7, 8, or 9
+  const scx = 11;                  // sprite horizontal center
+  const bl  = Math.floor(scx - bw / 2);
+  const br  = bl + bw;
+
+  // Head: slightly offset toward facing direction
+  const HCY = 4.5;
+  const HRX = side ? 3 : 3.5;
+  const HRY = 3.5;
+  const HCX = side        ? (toRight ? scx+1   : scx-1)
+            : (diagF||diagB) ? (toRight ? scx+0.5 : scx-0.5)
+            : scx;
+
+  const BT=9, BH=6, BB=15;   // body top, height, bottom Y
+  const AW=2, AH=5;           // arm width and height
+
+  // Leg layout: split legs for front/back/diagonal, merged for side
+  const LT=BB, LH=5, BH2=2;
+  const LG  = side ? 0 : 2;
+  const LLW = Math.floor((bw-LG)/2);
+  const RLW = bw-LG-LLW;
+  const RLX = bl+LLW+LG;
+
+  // ── 1. LEGS ──────────────────────────────────────────────────
+  if (side) {
+    fill(state.pants, bl,  LT,         bw, LH-BH2);
+    fill(state.boots, bl,  LT+LH-BH2, bw, BH2);
+  } else {
+    fill(state.pants, bl,  LT,         LLW, LH-BH2);
+    fill(state.pants, RLX, LT,         RLW, LH-BH2);
+    fill(state.boots, bl,  LT+LH-BH2, LLW, BH2);
+    fill(state.boots, RLX, LT+LH-BH2, RLW, BH2);
+  }
+
+  // ── 1b. BACKPACK side view: behind everything ─────────────────
+  if (state.backpack && side) {
+    const bpx = toRight ? bl-2.5 : br+0.5;
+    fill('#5a4830', bpx,     BT+0.5, 2.5, BH*0.8);
+    fill('#8a6840', bpx+0.5, BT+1,   1.5, BH*0.6);
+  }
+
+  // ── 2. BACK ARM ──────────────────────────────────────────────
+  if (side) {
+    const bax = toRight ? bl-AW : br;
+    fill(state.primary, bax, BT+1, AW, 3);
+    fill(state.skin,    bax, BT+4, AW, AH-4);
+  } else {
+    fill(state.primary, bl-AW, BT,   AW, 3);
+    fill(state.skin,    bl-AW, BT+3, AW, AH-3);
+    fill(state.primary, br,    BT,   AW, 3);
+    fill(state.skin,    br,    BT+3, AW, AH-3);
+  }
+
+  // ── 3. TORSO ─────────────────────────────────────────────────
+  fill(state.primary, bl, BT, bw, BH);
+  const mx = bl + bw/2;
+  if (state.outfitStyle === 'vest') {
+    fill(state.accent,  bl,   BT,     bw,   1.5);
+    fill(state.accent,  bl+1, BT,     1,    BH);
+    fill(state.accent,  br-2, BT,     1,    BH);
+    fill(state.primary, bl+2, BT+1.5, bw-4, BH-1.5);
+  } else if (state.outfitStyle === 'jacket') {
+    fill(state.accent, bl,     BT,     bw, 1.5);
+    fill(state.accent, mx-0.5, BT+1.5, 1,  BH-1.5);
+  } else if (state.outfitStyle === 'hoodie') {
+    fill(state.accent, bl,   BT, bw, 2.5);
+    fill(state.accent, bl,   BT, 1,  BH);
+    fill(state.accent, br-1, BT, 1,  BH);
+  } else if (state.outfitStyle === 'armor') {
+    fill(state.accent, bl,   BT,                  bw,   1);
+    fill(state.accent, bl,   BT,                  1,    BH);
+    fill(state.accent, br-1, BT,                  1,    BH);
+    fill(state.accent, bl+1, BT+Math.floor(BH/2), bw-2, 1);
+  }
+  if (state.belt) {
+    fill('#5a4830', bl, BB-1.5, bw, 1.5);
+    if (w >= 32) fill('#c8a840', mx-1, BB-1.5, 2, 1.5);
+  }
+
+  // ── 3b. BACKPACK back view: over body; front view: straps ────
+  if (state.backpack) {
+    if (back) {
+      fill('#5a4830', bl-0.5, BT+0.5, bw+1, BH*0.85);
+      fill('#8a6840', bl,     BT+1,   bw,   BH*0.65);
+    } else if (front) {
+      fill('#5a4830', bl+1, BT, 1, BH);
+      fill('#5a4830', br-2, BT, 1, BH);
+    }
+  }
+
+  // ── 4. FRONT ARM (side view only) ────────────────────────────
+  if (side) {
+    const fax = toRight ? br : bl-AW;
+    fill(state.primary, fax, BT,   AW, 3);
+    fill(state.skin,    fax, BT+3, AW, AH-3);
+  }
+
+  // ── 5. NECK ──────────────────────────────────────────────────
+  if (front || side || diagF) {
+    fill(state.helmet ? '#3a3a3a' : state.skin, HCX-1, BT-2, 2, 2);
+  }
+
+  // ── 6. HEAD ──────────────────────────────────────────────────
+  if (state.helmet) {
+    oval('#555555', HCX, HCY, HRX+0.5, HRY+0.5);
+    if (front || side || diagF) fill('#2a2a3a', HCX-2, HCY+0.5, 4, 1.5);
+  } else {
+    oval(state.skin, HCX, HCY, HRX, HRY);
+
+    // hair (always drawn — visible from all angles)
+    if (state.hairStyle === 'short') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+    } else if (state.hairStyle === 'long') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+      fill(state.hairColor, HCX-HRX+0.5, HCY+HRY*0.4, HRX*2-1, 4);
+    } else if (state.hairStyle === 'mohawk') {
+      fill(state.hairColor, HCX-0.5, HCY-HRY-2.5, 1.5, HRY+2);
+    } else if (state.hairStyle === 'buzz') {
+      oval(state.hairColor, HCX, HCY-HRY*0.2, HRX, HRY*0.5);
+    } else if (state.hairStyle === 'pony') {
+      oval(state.hairColor, HCX, HCY-HRY*0.4, HRX, HRY*0.65);
+      const ptX = back ? HCX-HRX+0.5 : HCX+HRX-1.5;
+      fill(state.hairColor, ptX-0.5, HCY-0.5, 1.5, 6);
+    }
+
+    // face features: front = two full eyes; diagF = 3/4 two eyes; side = profile one eye
+    if (front) {
+      fill('#1a1a2a', HCX-2.5, HCY+0.5, 1.5, 1.5);
+      fill('#1a1a2a', HCX+1,   HCY+0.5, 1.5, 1.5);
+    } else if (diagF) {
+      fill('#1a1a2a', HCX-2,   HCY+0.5, 1.5, 1.5);
+      fill('#1a1a2a', HCX+0.5, HCY+0.5, 1,   1);
+    } else if (side) {
+      const ex = toRight ? HCX+1.5 : HCX-3;
+      fill('#1a1a2a', ex, HCY+0.5, 1.5, 1.5);
+    }
+    // back / diagB: no face features, just hair cap visible
+  }
+}
+
+function renderGenPreview() {
+  const state = getGenState();
+  ['N','NE','E','SE','S','SW','W','NW'].forEach(dir => {
+    const cv = document.getElementById('gen-cv-' + dir);
+    if (!cv) return;
+    const off = document.createElement('canvas');
+    off.width = GEN_RES; off.height = GEN_RES;
+    genDrawCharacter(off.getContext('2d'), GEN_RES, GEN_RES, dir, state);
+    const dctx = cv.getContext('2d');
+    dctx.imageSmoothingEnabled = false;
+    dctx.clearRect(0, 0, cv.width, cv.height);
+    dctx.drawImage(off, 0, 0, cv.width, cv.height);
+  });
+  const dcanvas = document.getElementById('gen-detail-canvas');
+  if (dcanvas) {
+    const off = document.createElement('canvas');
+    off.width = GEN_RES; off.height = GEN_RES;
+    genDrawCharacter(off.getContext('2d'), GEN_RES, GEN_RES, genCompassSelected, state);
+    const dctx = dcanvas.getContext('2d');
+    dctx.imageSmoothingEnabled = false;
+    dctx.clearRect(0, 0, dcanvas.width, dcanvas.height);
+    dctx.drawImage(off, 0, 0, dcanvas.width, dcanvas.height);
+  }
+}
+
+function applyStateToForm(state) {
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined) el.value = val; };
+  const setCb  = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined) el.checked = val; };
+  setVal('gen-build',        state.build);
+  setVal('gen-skin',         state.skin);
+  setVal('gen-hair-style',   state.hairStyle);
+  setVal('gen-hair-color',   state.hairColor);
+  setVal('gen-outfit-style', state.outfitStyle);
+  setVal('gen-primary',      state.primary);
+  setVal('gen-accent',       state.accent);
+  setVal('gen-pants',        state.pants);
+  setVal('gen-boots',        state.boots);
+  setCb('gen-helmet',        state.helmet);
+  setCb('gen-backpack',      state.backpack);
+  setCb('gen-belt',          state.belt);
+  renderGenPreview();
+}
+
+function genApplyPreset(name) {
+  const p = GEN_PRESETS[name];
+  if (p) applyStateToForm(p);
+}
+
+function genRandomize() {
+  const hairStyles = ['none','short','long','mohawk','buzz','pony'];
+  const outfits = ['vest','tshirt','jacket','hoodie','armor'];
+  const skinColors = ['#f0d8b0','#c8956c','#a06a40','#6b4226'];
+  const rand = arr => arr[Math.floor(Math.random() * arr.length)];
+  const randHex = () => '#' + Math.floor(Math.random()*0x1000000).toString(16).padStart(6,'0');
+  applyStateToForm({
+    build: Math.floor(Math.random() * 3),
+    skin: rand(skinColors),
+    hairStyle: rand(hairStyles),
+    hairColor: randHex(),
+    outfitStyle: rand(outfits),
+    primary: randHex(),
+    accent: randHex(),
+    pants: randHex(),
+    boots: randHex(),
+    helmet: Math.random() > 0.5,
+    backpack: Math.random() > 0.5,
+    belt: Math.random() > 0.3,
+  });
+}
+
+function setStatus(msg) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+function saveMyCharacter() {
+  localStorage.setItem(MY_CHARACTER_KEY, JSON.stringify(getGenState()));
+  const name = (document.getElementById('player-name-input').value || '').trim().slice(0, 20);
+  if (name) localStorage.setItem(PLAYER_NAME_KEY, name);
+  setStatus('Saved — this is how you\'ll look and be named to everyone in your next multiplayer match.');
+}
+
+function resetMyCharacter() {
+  localStorage.removeItem(MY_CHARACTER_KEY);
+  applyStateToForm(GEN_PRESETS.soldier);
+  setStatus('Reset — you\'ll use the default look in multiplayer again.');
+}
+
+// === BUILD THE FORM (mirrors devtool.html's buildGenModal, minus the
+// overlay/open-close mechanics — this page IS the generator) ===
+(function buildGenPanel() {
+  const mount = document.getElementById('gen-mount');
+
+  const box = document.createElement('div');
+  box.id = 'gen-box';
+  mount.appendChild(box);
+
+  const topbar = document.createElement('div');
+  topbar.id = 'gen-topbar';
+  topbar.innerHTML = `
+    <div class="gen-title">EDIT_CHARACTER.SH</div>
+    <button class="btn primary" id="btn-save-character">[ Save Character ]</button>
+  `;
+  box.appendChild(topbar);
+
+  const body = document.createElement('div');
+  body.id = 'gen-body';
+  box.appendChild(body);
+
+  const main = document.createElement('div');
+  main.id = 'gen-main';
+  body.appendChild(main);
+
+  const compass = document.createElement('div');
+  compass.className = 'compass-rose';
+  compass.id = 'gen-compass';
+  const GEN_LAYOUT = [['NW','N','NE'],['W',null,'E'],['SW','S','SE']];
+  GEN_LAYOUT.forEach(row => {
+    row.forEach(dir => {
+      const cell = document.createElement('div');
+      if (!dir) {
+        cell.className = 'compass-cell compass-center';
+        const sil = document.createElement('canvas');
+        sil.width = 40; sil.height = 40;
+        const sc = sil.getContext('2d');
+        sc.fillStyle = '#2a2840';
+        sc.beginPath(); sc.arc(20,22,12,0,Math.PI*2); sc.fill();
+        sc.beginPath(); sc.arc(20,10,6,0,Math.PI*2); sc.fill();
+        cell.appendChild(sil);
+      } else {
+        cell.className = 'compass-cell' + (dir === genCompassSelected ? ' active' : '');
+        cell.id = 'gen-cell-' + dir;
+        const cv = document.createElement('canvas');
+        cv.width = 64; cv.height = 64; cv.id = 'gen-cv-' + dir;
+        cell.appendChild(cv);
+        const lbl = document.createElement('div');
+        lbl.className = 'dir-label'; lbl.textContent = dir;
+        cell.appendChild(lbl);
+        cell.onclick = () => {
+          genCompassSelected = dir;
+          document.querySelectorAll('#gen-compass .compass-cell').forEach(c => c.classList.remove('active'));
+          cell.classList.add('active');
+          renderGenPreview();
+        };
+      }
+      compass.appendChild(cell);
+    });
+  });
+  main.appendChild(compass);
+
+  const detailCv = document.createElement('canvas');
+  detailCv.id = 'gen-detail-canvas'; detailCv.width = 176; detailCv.height = 176;
+  main.appendChild(detailCv);
+
+  const right = document.createElement('div');
+  right.id = 'gen-right';
+  body.appendChild(right);
+
+  function addSection(title) {
+    const d = document.createElement('div');
+    d.className = 'gen-section'; d.textContent = title;
+    right.appendChild(d);
+  }
+  function addRow(label, input) {
+    const d = document.createElement('div'); d.className = 'gen-row';
+    if (label) { const l = document.createElement('label'); l.className = 'gen-label'; l.textContent = label; d.appendChild(l); }
+    if (input) d.appendChild(input);
+    right.appendChild(d);
+    return d;
+  }
+  function colorInput(id, val) {
+    const i = document.createElement('input');
+    i.type = 'color'; i.id = id; i.value = val;
+    i.oninput = () => renderGenPreview();
+    return i;
+  }
+
+  // Presets
+  addSection('PRESETS');
+  const presetsDiv = document.createElement('div');
+  presetsDiv.className = 'gen-presets';
+  ['soldier','scout','heavy'].forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.textContent = '[ ' + p.charAt(0).toUpperCase() + p.slice(1) + ' ]';
+    btn.onclick = () => genApplyPreset(p);
+    presetsDiv.appendChild(btn);
+  });
+  right.appendChild(presetsDiv);
+
+  // Body section
+  addSection('BODY');
+  const buildRow = document.createElement('div'); buildRow.className = 'gen-row';
+  const buildLbl = document.createElement('label'); buildLbl.className = 'gen-label'; buildLbl.textContent = 'Build';
+  const buildSlider = document.createElement('input');
+  buildSlider.type = 'range'; buildSlider.id = 'gen-build';
+  buildSlider.min = '0'; buildSlider.max = '2'; buildSlider.step = '1'; buildSlider.value = '1';
+  buildSlider.style.cssText = 'flex:1;accent-color:var(--green);';
+  buildSlider.oninput = () => renderGenPreview();
+  const buildValLbl = document.createElement('span');
+  buildValLbl.id = 'gen-build-lbl'; buildValLbl.className = 'gen-build-lbl'; buildValLbl.textContent = 'average';
+  buildRow.appendChild(buildLbl); buildRow.appendChild(buildSlider); buildRow.appendChild(buildValLbl);
+  right.appendChild(buildRow);
+
+  const skinInput = colorInput('gen-skin', '#c8956c');
+  addRow('Skin', skinInput);
+
+  const swatchRow = document.createElement('div'); swatchRow.className = 'gen-swatches';
+  ['#f0d8b0','#c8956c','#a06a40','#6b4226'].forEach(col => {
+    const sw = document.createElement('div');
+    sw.className = 'gen-swatch'; sw.style.background = col;
+    sw.onclick = () => { skinInput.value = col; renderGenPreview(); };
+    swatchRow.appendChild(sw);
+  });
+  right.appendChild(swatchRow);
+
+  // Hair section
+  addSection('HAIR');
+  const hairSel = document.createElement('select');
+  hairSel.id = 'gen-hair-style';
+  hairSel.style.cssText = 'flex:1;background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:2px 4px;';
+  ['none','short','long','mohawk','buzz','pony'].forEach(s => {
+    const o = document.createElement('option'); o.value = s; o.textContent = s; hairSel.appendChild(o);
+  });
+  hairSel.value = 'short'; hairSel.oninput = () => renderGenPreview();
+  addRow('Style', hairSel);
+  addRow('Color', colorInput('gen-hair-color', '#2a1a0a'));
+
+  // Outfit section
+  addSection('OUTFIT');
+  const outfitSel = document.createElement('select');
+  outfitSel.id = 'gen-outfit-style';
+  outfitSel.style.cssText = 'flex:1;background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:2px 4px;';
+  ['vest','tshirt','jacket','hoodie','armor'].forEach(s => {
+    const o = document.createElement('option'); o.value = s; o.textContent = s; outfitSel.appendChild(o);
+  });
+  outfitSel.value = 'vest'; outfitSel.oninput = () => renderGenPreview();
+  addRow('Style', outfitSel);
+  [['Primary','gen-primary','#3a5a8a'],['Accent','gen-accent','#2a3a5a'],['Pants','gen-pants','#3a3a3a'],['Boots','gen-boots','#1a1a1a']].forEach(([lbl,id,val]) => {
+    addRow(lbl, colorInput(id, val));
+  });
+
+  // Gear section
+  addSection('GEAR');
+  [['gen-helmet','Helmet',false],['gen-backpack','Backpack',false],['gen-belt','Belt/Holster',true]].forEach(([id,lbl,checked]) => {
+    const r = document.createElement('div'); r.className = 'gen-checkbox-row';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.id = id; cb.checked = checked;
+    cb.onchange = () => renderGenPreview();
+    const l = document.createElement('label'); l.htmlFor = id; l.textContent = lbl; l.style.cursor = 'pointer';
+    r.appendChild(cb); r.appendChild(l); right.appendChild(r);
+  });
+
+  // Randomize
+  addSection('');
+  const randBtn = document.createElement('button');
+  randBtn.className = 'btn'; randBtn.style.cssText = 'width:100%;margin-top:4px;';
+  randBtn.textContent = '[ 🎲 Randomize ]'; randBtn.onclick = genRandomize;
+  right.appendChild(randBtn);
+
+  document.getElementById('btn-save-character').onclick = saveMyCharacter;
+  document.getElementById('player-name-input').value = localStorage.getItem(PLAYER_NAME_KEY) || '';
+
+  // Load this player's previously saved look, if any, otherwise leave the
+  // form's baked-in defaults (which match the "soldier" preset) as-is.
+  try {
+    const saved = localStorage.getItem(MY_CHARACTER_KEY);
+    if (saved) applyStateToForm(JSON.parse(saved));
+    else renderGenPreview();
+  } catch(e) { renderGenPreview(); }
+})();
+
+document.getElementById('btn-reset').onclick = resetMyCharacter;
+document.getElementById('btn-close-tab').onclick = () => window.close();
+</script>
+
+</body>
+</html>
