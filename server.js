@@ -320,10 +320,17 @@ var httpServer = app.listen(PORT, function() {
   console.log('Terminal running at http://localhost:' + PORT);
 });
 
-var wss = new WebSocketServer({ server: httpServer });
+// perMessageDeflate off: this connection carries frequent small real-time
+// packets (player position, enemy/pickup sync, ~10/sec), where per-message
+// compress/decompress overhead costs more latency than the bandwidth it saves.
+var wss = new WebSocketServer({ server: httpServer, perMessageDeflate: false });
 
 wss.on('connection', function(ws) {
   clients.set(ws, { id: genId(), name: null, lobbyId: null });
+  // Nagle's algorithm batches small writes to reduce packet count, at the
+  // cost of up to ~40ms of added latency — exactly backwards for a
+  // real-time game sending small frequent updates. Disable it per-socket.
+  if (ws._socket && ws._socket.setNoDelay) ws._socket.setNoDelay(true);
 
   ws.on('message', function(raw) {
     var msg;

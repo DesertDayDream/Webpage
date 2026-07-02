@@ -2025,6 +2025,11 @@ let playerScores = {};         // id -> { name, score } — host-authoritative, 
 // like devtool's sprites. Broadcast to teammates so they see it too; loaded
 // fresh at each match start in case it changed since the last one.
 let myCharacter = null;
+// WebSocket delivery is reliable/ordered (TCP), so this only needs to be
+// sent once per match instead of riding along on every ~10Hz position
+// update — it never changes mid-match, so resending it every tick was pure
+// bandwidth waste on every player's connection.
+let myCharacterSent = false;
 function loadMyCharacter() {
   try {
     const raw = localStorage.getItem('mercs_my_character');
@@ -2063,29 +2068,32 @@ Net.on('state', msg => {
     rp.targetX = msg.data.x; rp.targetY = msg.data.y;
     rp.facing = msg.data.facing; rp.hp = msg.data.hp; rp.maxHp = msg.data.maxHp;
     rp.weaponName = msg.data.weaponName;
-    rp.character = msg.data.character || null;
+    // Only sent once (see updateMultiplayerNet) — don't let the many ticks
+    // that omit it stomp the value back to null once it's been received.
+    if (msg.data.character) rp.character = msg.data.character;
     if (rp.x === undefined) { rp.x = msg.data.x; rp.y = msg.data.y; }
-  } else if (msg.kind === 'enemies' && !isHost) {
+  } else if (msg.kind === 'hostState' && !isHost) {
+    const d = msg.data;
+
     // killEnemy() only ever runs on the host — detect enemies that just went
     // from alive to dead in this snapshot so non-host clients still get a
     // death sound instead of just the silent dissolve animation.
     const wasDead = new Set(enemies.filter(e => e.deathTimer >= 0).map(e => e.id));
-    msg.data.forEach(d => { if (d.deathTimer >= 0 && !wasDead.has(d.id)) SOUNDS.play(d.type, 'death'); });
-    enemies = msg.data.map(d => Object.assign({}, d, { def: ENEMY_DEFS[d.type] || ENEMY_DEFS.ENEMY_BASIC }));
-  } else if (msg.kind === 'pickups' && !isHost) {
+    d.enemies.forEach(de => { if (de.deathTimer >= 0 && !wasDead.has(de.id)) SOUNDS.play(de.type, 'death'); });
+    enemies = d.enemies.map(de => Object.assign({}, de, { def: ENEMY_DEFS[de.type] || ENEMY_DEFS.ENEMY_BASIC }));
+
     // Same idea as the enemy-death diff above — pickups only ever spawn on
     // the host, so detect newly-appeared ones here to play a spawn sound.
     const hadIds = new Set(pickups.map(p => p.id));
-    msg.data.forEach(d => { if (!hadIds.has(d.id)) SOUNDS.play(pickupSoundName(d.kind), 'spawn'); });
-    pickups = msg.data.map(d => Object.assign({}, d));
-  } else if (msg.kind === 'timer' && !isHost) {
-    mainTimer = msg.data.mainTimer; elapsed = msg.data.elapsed;
-  } else if (msg.kind === 'scores') {
-    playerScores = msg.data.scores;
-    mpCombo = msg.data.combo;
-    mpComboTimer = msg.data.comboTimer;
-    comboMilestone = msg.data.milestone;
-    comboMilestoneTimer = msg.data.milestoneTimer;
+    d.pickups.forEach(dp => { if (!hadIds.has(dp.id)) SOUNDS.play(pickupSoundName(dp.kind), 'spawn'); });
+    pickups = d.pickups.map(dp => Object.assign({}, dp));
+
+    mainTimer = d.mainTimer; elapsed = d.elapsed;
+    playerScores = d.scores;
+    mpCombo = d.combo;
+    mpComboTimer = d.comboTimer;
+    comboMilestone = d.milestone;
+    comboMilestoneTimer = d.milestoneTimer;
   }
 });
 
@@ -2140,6 +2148,7 @@ function startMultiplayerMatch(msg) {
   mpDowned = false;
   mpMatchId = null;
   myCharacter = loadMyCharacter();
+  myCharacterSent = false;
 
   remotePlayers = new Map();
   playerScores = {};
@@ -2207,29 +2216,36 @@ function drawRemotePlayers(ctx) {
 }
 
 // Broadcasts this client's own state ~10/sec, plus the host's authoritative
-// shared state (enemies/pickups/timer/scores) at the same rate.
+// shared state (enemies/pickups/timer/scores) at the same rate — bundled
+// into a single 'hostState' message instead of 4 separate sends, since each
+// separate WebSocket send is its own frame with its own overhead, and the
+// server fans every one of them out to every other player in the lobby.
 function updateMultiplayerNet(dt) {
   netBroadcastTimer += dt;
   if (netBroadcastTimer < 0.1) return;
   netBroadcastTimer = 0;
 
-  Net.send('state', { kind: 'player', data: {
+  const playerData = {
     x: player.x, y: player.y, facing: player.facing,
     hp: mpDowned ? 0 : player.hp, maxHp: player.maxHp,
-    weaponName: EQUIPPED_RANGED.name, character: myCharacter,
-  }});
+    weaponName: EQUIPPED_RANGED.name,
+  };
+  // Sent once, not every tick — it never changes mid-match and WebSocket
+  // delivery is reliable, so there's nothing to gain from repeating it.
+  if (!myCharacterSent) { playerData.character = myCharacter; myCharacterSent = true; }
+  Net.send('state', { kind: 'player', data: playerData });
 
   if (isHost) {
-    Net.send('state', { kind: 'enemies', data: enemies.map(e => ({
-      id: e.id, x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp, type: e.type,
-      flashTimer: e.flashTimer, deathTimer: e.deathTimer,
-    })) });
-    Net.send('state', { kind: 'pickups', data: pickups.map(p => ({
-      id: p.id, kind: p.kind, x: p.x, y: p.y, timer: p.timer,
-      amount: p.amount, weaponName: p.weaponName, category: p.category,
-    })) });
-    Net.send('state', { kind: 'timer', data: { mainTimer, elapsed } });
-    Net.send('state', { kind: 'scores', data: {
+    Net.send('state', { kind: 'hostState', data: {
+      enemies: enemies.map(e => ({
+        id: e.id, x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp, type: e.type,
+        flashTimer: e.flashTimer, deathTimer: e.deathTimer,
+      })),
+      pickups: pickups.map(p => ({
+        id: p.id, kind: p.kind, x: p.x, y: p.y, timer: p.timer,
+        amount: p.amount, weaponName: p.weaponName, category: p.category,
+      })),
+      mainTimer, elapsed,
       scores: playerScores, combo: mpCombo, comboTimer: mpComboTimer,
       milestone: comboMilestone, milestoneTimer: comboMilestoneTimer,
     }});
