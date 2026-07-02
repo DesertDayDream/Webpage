@@ -34,12 +34,18 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const db = new Database(DB_PATH);
 db.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 db.exec('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY)');
+// Real rows (not a single JSON blob like `kv`) so concurrent submissions from
+// different players just INSERT — no read-modify-write race between two
+// people saving a score at the same time.
+db.exec('CREATE TABLE IF NOT EXISTS leaderboard (id INTEGER PRIMARY KEY AUTOINCREMENT, board TEXT NOT NULL, initials TEXT NOT NULL, score INTEGER NOT NULL, created_at INTEGER NOT NULL)');
 
 const stmtGet        = db.prepare('SELECT value FROM kv WHERE key = ?');
 const stmtUpsert     = db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)');
 const stmtAddSession = db.prepare('INSERT OR IGNORE INTO sessions (token) VALUES (?)');
 const stmtDelSession = db.prepare('DELETE FROM sessions WHERE token = ?');
 const stmtHasSession = db.prepare('SELECT 1 FROM sessions WHERE token = ?');
+const stmtLbTop       = db.prepare('SELECT initials, score FROM leaderboard WHERE board = ? ORDER BY score DESC LIMIT 10');
+const stmtLbInsert    = db.prepare('INSERT INTO leaderboard (board, initials, score, created_at) VALUES (?, ?, ?, ?)');
 
 function getToken(req) {
   var m = (req.headers.cookie || '').match(/(?:^|;\s*)trm_session=([^;]+)/);
@@ -157,6 +163,41 @@ app.post('/api/mercs-config', requireAuth, function(req, res) {
   res.json({ ok: true });
 });
 
+// GET /api/leaderboard?board=sp|mp → { entries: [{initials,score}, ...] }
+// (top 10, public — a shared leaderboard everyone can see).
+app.get('/api/leaderboard', function(req, res) {
+  var board = req.query.board === 'mp' ? 'mp' : 'sp';
+  res.json({ entries: stmtLbTop.all(board) });
+});
+
+// POST /api/leaderboard ← { board, initials, score, matchId? } — public, no
+// login: any player can submit their own run. There's no player-account
+// system, so this still trusts the client's initials — but for board 'mp' the
+// score itself is checked against a real match result the server recorded
+// when that match ended (see the 'end' WebSocket handler below), instead of
+// trusting whatever number the client sends. Single-player has no such
+// ground truth (it's simulated entirely client-side), so it stays
+// bounds-checked only, same as before.
+app.post('/api/leaderboard', function(req, res) {
+  var body = req.body || {};
+  var board = body.board === 'mp' ? 'mp' : 'sp';
+  var initials = String(body.initials || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+  var score = Math.floor(Number(body.score));
+  if (!initials || !Number.isFinite(score) || score <= 0 || score > 1e8) {
+    return res.status(400).json({ error: 'invalid entry' });
+  }
+  if (board === 'mp') {
+    sweepMpResults();
+    var record = recentMpResults.get(body.matchId);
+    if (!record || record.teamScore !== score) {
+      return res.status(400).json({ error: 'score does not match a recent match result' });
+    }
+    recentMpResults.delete(body.matchId); // one-time use — no resubmitting the same match
+  }
+  stmtLbInsert.run(board, initials, score, Date.now());
+  res.json({ ok: true });
+});
+
 // ── MULTIPLAYER (WebSocket lobby + relay) ──
 //
 // Thin relay: this server doesn't understand game rules. It just tracks lobby
@@ -172,6 +213,17 @@ app.post('/api/mercs-config', requireAuth, function(req, res) {
 const MAX_PLAYERS = 4;
 const lobbies = new Map(); // lobbyId -> { id, name, hostId, state, players: Map<playerId,{id,name,ws}> }
 const clients = new Map(); // ws -> { id, name, lobbyId }
+
+// Real match results the server itself computed from a match's 'end' message
+// (not the client's later leaderboard POST), keyed by a one-time matchId —
+// lets POST /api/leaderboard verify a submitted mp score against a match that
+// actually happened, instead of trusting the client's number outright.
+// In-memory/short-lived like `lobbies`, for the same reason (see note above).
+const recentMpResults = new Map(); // matchId -> { teamScore, expiresAt }
+function sweepMpResults() {
+  var now = Date.now();
+  recentMpResults.forEach(function(rec, id) { if (rec.expiresAt < now) recentMpResults.delete(id); });
+}
 
 function genId() { return crypto.randomBytes(8).toString('hex'); }
 
@@ -331,8 +383,14 @@ wss.on('connection', function(ws) {
     if (msg.type === 'end') {
       var lobby = lobbies.get(info.lobbyId);
       if (!lobby || lobby.hostId !== info.id) return;
+      var scores = msg.scores || {};
+      var teamScore = 0;
+      Object.keys(scores).forEach(function(pid) { teamScore += (scores[pid] && scores[pid].score) || 0; });
+      sweepMpResults();
+      var matchId = genId();
+      recentMpResults.set(matchId, { teamScore: teamScore, expiresAt: Date.now() + 5 * 60 * 1000 });
       lobby.players.forEach(function(p) {
-        send(p.ws, 'ended', { scores: msg.scores || {} });
+        send(p.ws, 'ended', { scores: scores, matchId: matchId });
         var pInfo = clients.get(p.ws);
         if (pInfo) pInfo.lobbyId = null;
       });

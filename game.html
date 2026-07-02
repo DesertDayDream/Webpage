@@ -237,8 +237,13 @@ const MAP_CONFIG = loadMapConfig();
 const MAP_W = MAP_CONFIG.width, MAP_H = MAP_CONFIG.height;
 const WALLS = [...borderWalls(MAP_W, MAP_H), ...MAP_CONFIG.walls];
 
-const HS_KEY = 'mercs_highscore';
-const LB_KEY  = 'mercs_leaderboard';
+const HS_KEY = 'mercs_highscore'; // personal best marker — stays local/per-device, not part of the shared leaderboard
+// Both leaderboards are server-backed (GET/POST /api/leaderboard) so every
+// player sees the same shared rankings, not just their own browser. 'sp' and
+// 'mp' are separate boards — a summed multiplayer team score isn't
+// comparable to a solo single-player score, so they don't share a list.
+const LB_BOARD_SP = 'sp';
+const LB_BOARD_MP = 'mp';
 const LB_MAX  = 10;
 
 // === SPRITE SYSTEM ===
@@ -505,7 +510,8 @@ function pointInWall(px, py) {
 // === GAME STATE ===
 
 // 'start' | 'playing' | 'dead' | 'enterInitials' | 'leaderboard' | 'settings' |
-// 'mpConnect' | 'mpName' | 'mpBrowse' | 'mpLobby' | 'mpPlaying' | 'mpEnded'
+// 'mpConnect' | 'mpName' | 'mpBrowse' | 'mpLobby' | 'mpPlaying' | 'mpEnded' |
+// 'mpEnterInitials' | 'mpLeaderboard'
 let STATE = 'start';
 
 const player = {
@@ -545,25 +551,42 @@ let pendingScore    = 0;
 let initials        = ['A','A','A'];
 let initialsCursor  = 0;
 let leaderboardEntries = [];
+let mpLeaderboardEntries = []; // separate cached list for the multiplayer team leaderboard
+let leaderboardLoading = false;   // true while a fresh GET is in flight, for the "LOADING..." row
+let mpLeaderboardLoading = false;
 let justSavedIndex  = -1;
+let mpLbMsg = '';    // transient status text on the MATCH OVER screen (e.g. "doesn't qualify")
+let mpLbMsgUntil = 0;
 
-function loadLeaderboard() {
-  try { return JSON.parse(localStorage.getItem(LB_KEY) || '[]'); } catch(e) { return []; }
+// Server is authoritative; on any network failure just show an empty board
+// rather than blocking the screen — same fallback style as the devtool
+// config bootstrap at the top of this file.
+async function loadLeaderboard(board = LB_BOARD_SP) {
+  try {
+    const r = await fetch(API_BASE + '/api/leaderboard?board=' + board);
+    const d = await r.json();
+    return (d && d.entries) || [];
+  } catch(e) { return []; }
 }
 
-function qualifiesForLeaderboard(s) {
+async function qualifiesForLeaderboard(s, board = LB_BOARD_SP) {
   if (s <= 0) return false;
-  const lb = loadLeaderboard();
+  const lb = await loadLeaderboard(board);
   return lb.length < LB_MAX || s > lb[lb.length - 1].score;
 }
 
-function addLeaderboardEntry(name, s) {
-  const lb = loadLeaderboard();
-  lb.push({ initials: name, score: s });
-  lb.sort((a, b) => b.score - a.score);
-  const trimmed = lb.slice(0, LB_MAX);
-  localStorage.setItem(LB_KEY, JSON.stringify(trimmed));
-  return trimmed;
+async function addLeaderboardEntry(name, s, board = LB_BOARD_SP, matchId = null) {
+  let ok = true;
+  try {
+    const r = await fetch(API_BASE + '/api/leaderboard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ board, initials: name, score: s, matchId }),
+    });
+    ok = r.ok;
+  } catch(e) { ok = false; }
+  const entries = await loadLeaderboard(board); // refetch so the list reflects this entry's rank
+  return { ok, entries };
 }
 
 function cycleLetter(cur, dir) {
@@ -573,6 +596,7 @@ function cycleLetter(cur, dir) {
 }
 
 function handleInitialsKey(e) {
+  const isMp = STATE === 'mpEnterInitials';
   const k = e.key;
   if (/^[a-zA-Z]$/.test(k)) {
     initials[initialsCursor] = k.toUpperCase();
@@ -595,12 +619,38 @@ function handleInitialsKey(e) {
     e.preventDefault();
   } else if (k === 'Enter') {
     const name = initials.join('');
-    leaderboardEntries = addLeaderboardEntry(name, pendingScore);
-    justSavedIndex = leaderboardEntries.findIndex(en => en.initials === name && en.score === pendingScore);
-    STATE = 'leaderboard';
+    justSavedIndex = -1;
+    if (isMp) {
+      STATE = 'mpLeaderboard';
+      mpLeaderboardEntries = [];
+      mpLeaderboardLoading = true;
+      addLeaderboardEntry(name, pendingScore, LB_BOARD_MP, mpMatchId).then(({ ok, entries }) => {
+        mpLeaderboardEntries = entries;
+        mpLeaderboardLoading = false;
+        if (ok) {
+          justSavedIndex = entries.findIndex(en => en.initials === name && en.score === pendingScore);
+        } else {
+          // Server couldn't verify this against a real match result (token
+          // expired, already used, etc.) — back to MATCH OVER with an
+          // explanation instead of a leaderboard screen with no new entry.
+          STATE = 'mpEnded';
+          mpLbMsg = 'Could not verify this run — it may have already been saved, or too much time passed.';
+          mpLbMsgUntil = Date.now() + 4000;
+        }
+      });
+    } else {
+      STATE = 'leaderboard';
+      leaderboardEntries = [];
+      leaderboardLoading = true;
+      addLeaderboardEntry(name, pendingScore, LB_BOARD_SP).then(({ entries }) => {
+        leaderboardEntries = entries;
+        leaderboardLoading = false;
+        justSavedIndex = entries.findIndex(en => en.initials === name && en.score === pendingScore);
+      });
+    }
     e.preventDefault();
   } else if (k === 'Escape') {
-    STATE = 'dead';
+    STATE = isMp ? 'mpEnded' : 'dead';
     e.preventDefault();
   }
 }
@@ -1601,8 +1651,43 @@ function drawMpEndedScreen(ctx) {
     });
   }
 
-  const bw = 220, bh = 46, bx = CW/2 - bw/2, by = y + 30;
+  const teamScore = entries.reduce((sum, [, ps]) => sum + (ps.score || 0), 0);
+  if (entries.length > 0) {
+    ctx.fillStyle = '#8a88a0';
+    ctx.font = '16px VT323, monospace';
+    ctx.fillText('TEAM TOTAL:  ' + teamScore, CW/2, y + 6);
+    y += 34;
+  }
+
+  const bw = 220, bh = 46, bx = CW/2 - bw/2;
+  let by = y + 16;
+
+  // Submitting the team's run is the host's call only — everyone else just
+  // sees the final scores and heads back to browsing lobbies.
+  if (isHost && entries.length > 0) {
+    uiButton(ctx, bx, by, bw, bh, '[ SAVE TEAM RUN ]', () => {
+      qualifiesForLeaderboard(teamScore, LB_BOARD_MP).then(qualifies => {
+        if (qualifies) {
+          pendingScore = teamScore;
+          initials = ['A','A','A']; initialsCursor = 0;
+          STATE = 'mpEnterInitials';
+        } else {
+          mpLbMsg = 'Team score too low to make the leaderboard.';
+          mpLbMsgUntil = Date.now() + 3000;
+        }
+      });
+    });
+    by += bh + 12;
+  }
+
   uiButton(ctx, bx, by, bw, bh, '[ BACK TO LOBBIES ]', () => { STATE = 'mpBrowse'; Net.send('list'); });
+  by += bh + 12;
+
+  if (mpLbMsg && Date.now() < mpLbMsgUntil) {
+    ctx.fillStyle = '#c84040';
+    ctx.font = '14px VT323, monospace';
+    ctx.fillText(mpLbMsg, CW/2, by);
+  }
   ctx.textAlign = 'left';
 }
 
@@ -1714,6 +1799,10 @@ function loadMyCharacter() {
 let mpCombo = 0;
 let mpComboTimer = 0;
 let mpFinalScores = {};
+// One-time token the server hands back with the real match result it
+// recorded, so a later leaderboard submission can be checked against an
+// actual match instead of trusting whatever number the client sends.
+let mpMatchId = null;
 let mpDowned = false;          // this client's own player hit 0 HP but the match continues
 let nextEnemyId = 1;
 let nextPickupId = 1;
@@ -1727,7 +1816,7 @@ Net.on('lobby', msg => {
 });
 Net.on('error', msg => { mpErrorMsg = msg.message || 'Error'; mpErrorUntil = Date.now() + 3000; });
 Net.on('started', msg => { startMultiplayerMatch(msg); });
-Net.on('ended', msg => { STATE = 'mpEnded'; mpFinalScores = msg.scores || {}; });
+Net.on('ended', msg => { STATE = 'mpEnded'; mpFinalScores = msg.scores || {}; mpMatchId = msg.matchId || null; });
 
 Net.on('state', msg => {
   if (msg.kind === 'player') {
@@ -1802,6 +1891,7 @@ function startMultiplayerMatch(msg) {
   nextEnemyId = 1; nextPickupId = 1;
   netBroadcastTimer = 0;
   mpDowned = false;
+  mpMatchId = null;
   myCharacter = loadMyCharacter();
 
   remotePlayers = new Map();
@@ -2177,21 +2267,22 @@ function drawDeadScreen(ctx) {
 }
 
 function drawInitialsScreen(ctx) {
+  const isMp = STATE === 'mpEnterInitials';
   ctx.fillStyle = 'rgba(0,0,0,0.90)';
   ctx.fillRect(0,0,CW,CH);
   ctx.textAlign = 'center';
 
   ctx.fillStyle = '#f0e040';
   ctx.font = '36px VT323, monospace';
-  ctx.fillText('NEW HIGH SCORE!', CW/2, CH/2 - 120);
+  ctx.fillText(isMp ? 'SAVE TEAM RUN' : 'NEW HIGH SCORE!', CW/2, CH/2 - 120);
 
   ctx.fillStyle = '#c8a840';
   ctx.font = '26px VT323, monospace';
-  ctx.fillText('SCORE:  ' + pendingScore, CW/2, CH/2 - 80);
+  ctx.fillText((isMp ? 'TEAM SCORE:  ' : 'SCORE:  ') + pendingScore, CW/2, CH/2 - 80);
 
   ctx.fillStyle = '#8a88a0';
   ctx.font = '16px VT323, monospace';
-  ctx.fillText('ENTER YOUR INITIALS', CW/2, CH/2 - 44);
+  ctx.fillText(isMp ? 'ENTER YOUR SQUAD TAG' : 'ENTER YOUR INITIALS', CW/2, CH/2 - 44);
 
   // Three letter boxes, arcade-style
   const boxW = 46, boxH = 56, gap = 16;
@@ -2232,14 +2323,14 @@ function drawLeaderboardScreen(ctx) {
   ctx.font = '44px VT323, monospace';
   ctx.fillText('LEADERBOARD', CW/2, 76);
 
-  const lb = leaderboardEntries.length ? leaderboardEntries : loadLeaderboard();
+  const lb = leaderboardEntries;
   const colRank = CW/2 - 170, colInitials = CW/2 - 100, colScore = CW/2 + 170;
   const startY = 130, rowH = 34;
 
   if (lb.length === 0) {
     ctx.fillStyle = '#5a5870';
     ctx.font = '18px VT323, monospace';
-    ctx.fillText('NO SCORES YET', CW/2, startY + 20);
+    ctx.fillText(leaderboardLoading ? 'LOADING...' : 'NO SCORES YET', CW/2, startY + 20);
   }
 
   lb.forEach((entry, i) => {
@@ -2261,6 +2352,46 @@ function drawLeaderboardScreen(ctx) {
   ctx.font = '22px VT323, monospace';
   ctx.fillText('CLICK OR ENTER — PLAY AGAIN        ESC — BACK', CW/2, CH - 30);
   ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+}
+
+// Multiplayer's own leaderboard — separate list from single-player's (team
+// totals aren't comparable to solo scores), reached only via a host's
+// "SAVE TEAM RUN" submission on the MATCH OVER screen.
+function drawMpLeaderboardScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.92)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#f0c840';
+  ctx.font = '44px VT323, monospace';
+  ctx.fillText('TEAM LEADERBOARD', CW/2, 76);
+
+  const lb = mpLeaderboardEntries;
+  const colRank = CW/2 - 170, colInitials = CW/2 - 100, colScore = CW/2 + 170;
+  const startY = 130, rowH = 34;
+
+  if (lb.length === 0) {
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '18px VT323, monospace';
+    ctx.fillText(mpLeaderboardLoading ? 'LOADING...' : 'NO TEAM RUNS YET', CW/2, startY + 20);
+  }
+
+  lb.forEach((entry, i) => {
+    const y = startY + i * rowH;
+    const isNew = i === justSavedIndex;
+    ctx.font = (isNew ? 'bold ' : '') + '22px VT323, monospace';
+    ctx.fillStyle = isNew ? '#3ef83e' : (i === 0 ? '#f0e040' : '#c8c6e0');
+    ctx.textAlign = 'left';
+    ctx.fillText((i+1) + '.', colRank, y);
+    ctx.fillText(entry.initials, colInitials, y);
+    ctx.textAlign = 'right';
+    ctx.fillText(entry.score.toString().padStart(8,'0'), colScore, y);
+  });
+  ctx.textAlign = 'center';
+
+  const bw = 220, bh = 44, bx = CW/2 - bw/2, by = startY + Math.max(lb.length, 1) * rowH + 30;
+  uiButton(ctx, bx, by, bw, bh, '[ BACK TO LOBBIES ]', () => { STATE = 'mpBrowse'; Net.send('list'); });
   ctx.textAlign = 'left';
 }
 
@@ -2308,18 +2439,21 @@ function updateTimers(dt) {
   }
 }
 
-function endGame() {
+async function endGame() {
   if (score > highScore) {
     highScore = score;
     localStorage.setItem(HS_KEY, highScore);
   }
   pendingScore = score;
-  if (qualifiesForLeaderboard(score)) {
+  STATE = 'dead'; // safe default while the leaderboard check is in flight
+  const qualifies = await qualifiesForLeaderboard(score, LB_BOARD_SP);
+  // Only upgrade to the initials prompt if still on the dead screen — the
+  // player may have already navigated away (e.g. back to start) by the time
+  // this resolves.
+  if (STATE === 'dead' && qualifies) {
     STATE = 'enterInitials';
     initials = ['A','A','A'];
     initialsCursor = 0;
-  } else {
-    STATE = 'dead';
   }
 }
 
@@ -2384,7 +2518,7 @@ function loop(now) {
   }
 
   // Render — world-space (camera transform)
-  const frozenOverlay = STATE === 'dead' || STATE === 'enterInitials' || STATE === 'leaderboard' || STATE === 'mpEnded';
+  const frozenOverlay = STATE === 'dead' || STATE === 'enterInitials' || STATE === 'leaderboard' || STATE === 'mpEnded' || STATE === 'mpEnterInitials' || STATE === 'mpLeaderboard';
   ctx.save();
   ctx.translate(-Math.round(camera.x), -Math.round(camera.y));
   drawMap(ctx);
@@ -2404,7 +2538,7 @@ function loop(now) {
   if (mpActive) drawMpHUD(ctx);
   if (STATE === 'start')         drawStartScreen(ctx);
   if (STATE === 'dead')          drawDeadScreen(ctx);
-  if (STATE === 'enterInitials') drawInitialsScreen(ctx);
+  if (STATE === 'enterInitials' || STATE === 'mpEnterInitials') drawInitialsScreen(ctx);
   if (STATE === 'leaderboard')   drawLeaderboardScreen(ctx);
   if (STATE === 'settings')      drawSettingsScreen(ctx);
   if (STATE === 'mpConnect')     drawMpConnectScreen(ctx);
@@ -2412,6 +2546,7 @@ function loop(now) {
   if (STATE === 'mpBrowse')      drawMpBrowseScreen(ctx);
   if (STATE === 'mpLobby')       drawMpLobbyScreen(ctx);
   if (STATE === 'mpEnded')       drawMpEndedScreen(ctx);
+  if (STATE === 'mpLeaderboard') drawMpLeaderboardScreen(ctx);
 }
 
 // === INIT ===
@@ -2428,16 +2563,22 @@ canvas.addEventListener('click', e => {
 });
 window.addEventListener('keydown', e => {
   if (TextEntry.active) { TextEntry.handleKey(e); return; }
-  if (STATE === 'enterInitials') { handleInitialsKey(e); return; }
+  if (STATE === 'enterInitials' || STATE === 'mpEnterInitials') { handleInitialsKey(e); return; }
   if (STATE === 'leaderboard') {
     if (e.key === 'Enter') startGame();
     else if (e.key === 'Escape') STATE = 'start';
     return;
   }
+  if (STATE === 'mpLeaderboard') {
+    if (e.key === 'Escape') { STATE = 'mpBrowse'; Net.send('list'); }
+    return;
+  }
   if ((STATE === 'start' || STATE === 'dead') && e.key.toLowerCase() === 'l') {
-    leaderboardEntries = loadLeaderboard();
     justSavedIndex = -1;
     STATE = 'leaderboard';
+    leaderboardEntries = [];
+    leaderboardLoading = true;
+    loadLeaderboard(LB_BOARD_SP).then(entries => { leaderboardEntries = entries; leaderboardLoading = false; });
     return;
   }
   if (e.key === 'Enter' && (STATE === 'start' || STATE === 'dead')) startGame();
