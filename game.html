@@ -922,15 +922,22 @@ function killEnemy(e, isMelee, killerId) {
   e.deathTimer = 0;
   const mp = STATE === 'mpPlaying';
 
+  const milestones = {5:'GOOD!', 10:'GREAT!!', 20:'EXCELLENT!!!', 30:'★ LEGENDARY ★'};
+
   let mult;
   if (mp) {
-    // Each player keeps an independent combo streak even though the enemy
-    // pool itself is shared — host is authoritative for all of them.
-    const ps = playerScores[killerId] || (playerScores[killerId] = { name: '', score: 0, combo: 0, comboTimer: 0 });
-    ps.combo++;
-    ps.comboTimer = COMBO_TIMEOUT;
-    mult = ps.combo;
+    // Combo is a shared team streak — any player's kill extends it, host is
+    // authoritative. Score is still tracked per player for the scoreboard.
+    const ps = playerScores[killerId] || (playerScores[killerId] = { name: '', score: 0 });
+    mpCombo++;
+    mpComboTimer = COMBO_TIMEOUT;
+    mult = mpCombo;
     ps.score += e.def.score * mult;
+
+    if (milestones[mpCombo]) {
+      comboMilestone = milestones[mpCombo];
+      comboMilestoneTimer = 2000;
+    }
   } else {
     combo++;
     if (combo > peakCombo) peakCombo = combo;
@@ -938,7 +945,6 @@ function killEnemy(e, isMelee, killerId) {
     mult = combo;
     score += e.def.score * mult;
 
-    const milestones = {5:'GOOD!', 10:'GREAT!!', 20:'EXCELLENT!!!', 30:'★ LEGENDARY ★'};
     if (milestones[combo]) {
       comboMilestone = milestones[combo];
       comboMilestoneTimer = 2000;
@@ -1209,6 +1215,25 @@ function drawFlashes(ctx) {
 
 // === HUD ===
 
+// Shared by drawHUD (single-player) and drawMpHUD (multiplayer's shared team
+// combo) — same flash-and-scale text at center bottom either way.
+function drawComboMilestone(ctx) {
+  if (comboMilestoneTimer > 0 && comboMilestone) {
+    const alpha = comboMilestoneTimer > 1500 ? 1 : comboMilestoneTimer / 1500;
+    const scale = comboMilestoneTimer > 1700 ? 1 + (2000-comboMilestoneTimer)/300*0.3 : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(CW/2, CH-30);
+    ctx.scale(scale, scale);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f0c840';
+    ctx.font = '36px VT323, monospace';
+    ctx.fillText(comboMilestone, 0, 0);
+    ctx.restore();
+    ctx.textAlign = 'left';
+  }
+}
+
 function drawHUD(ctx) {
   // Semi-transparent panel areas
   const panelAlpha = 0.72;
@@ -1278,21 +1303,7 @@ function drawHUD(ctx) {
   }
   ctx.textAlign = 'left';
 
-  // Combo milestone flash (center bottom)
-  if (comboMilestoneTimer > 0 && comboMilestone) {
-    const alpha = comboMilestoneTimer > 1500 ? 1 : comboMilestoneTimer / 1500;
-    const scale = comboMilestoneTimer > 1700 ? 1 + (2000-comboMilestoneTimer)/300*0.3 : 1;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(CW/2, CH-30);
-    ctx.scale(scale, scale);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#f0c840';
-    ctx.font = '36px VT323, monospace';
-    ctx.fillText(comboMilestone, 0, 0);
-    ctx.restore();
-    ctx.textAlign = 'left';
-  }
+  drawComboMilestone(ctx);
 
   // High score hint
   if (highScore > 0) {
@@ -1366,6 +1377,27 @@ function drawMpHUD(ctx) {
     ctx.fillText(String(ps.score), CW-14, y);
     ctx.textAlign = 'left';
   });
+
+  // Team combo — shared across every player, not per-player like the
+  // scoreboard above.
+  const comboY = 8 + boardH + 8;
+  const comboColor = mpCombo >= 20 ? '#ff8040' : mpCombo >= 10 ? '#f0c840' : mpCombo >= 5 ? '#c8e840' : '#3ef83e';
+  ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
+  ctx.fillRect(CW-180, comboY, 172, 34);
+  ctx.strokeStyle = '#3a384e'; ctx.strokeRect(CW-180, comboY, 172, 34);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = comboColor; ctx.font = '18px VT323, monospace';
+  ctx.fillText('x' + (mpCombo || 1) + '  TEAM COMBO', CW-14, comboY + 22);
+  ctx.textAlign = 'left';
+  if (mpCombo > 0) {
+    const cbPct = mpComboTimer / COMBO_TIMEOUT;
+    ctx.fillStyle = '#1a1a2a';
+    ctx.fillRect(CW-180, comboY + 30, 172, 4);
+    ctx.fillStyle = comboColor;
+    ctx.fillRect(CW-180, comboY + 30, Math.round(172 * cbPct), 4);
+  }
+
+  drawComboMilestone(ctx);
 
   if (mpDowned) {
     const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 300);
@@ -1499,7 +1531,12 @@ let mpErrorUntil = 0;
 // everyone else just renders the host's broadcasts.
 let isHost = false;
 let remotePlayers = new Map(); // id -> { name, x, y, targetX, targetY, facing, hp, maxHp, weaponName }
-let playerScores = {};         // id -> { name, score, combo, comboTimer } — host-authoritative
+let playerScores = {};         // id -> { name, score } — host-authoritative, per-player
+// Combo is a shared team streak in MP (any player's kill extends it), unlike
+// single-player's per-run combo/comboTimer above — host-authoritative, broadcast
+// to everyone alongside scores.
+let mpCombo = 0;
+let mpComboTimer = 0;
 let mpFinalScores = {};
 let mpDowned = false;          // this client's own player hit 0 HP but the match continues
 let nextEnemyId = 1;
@@ -1531,7 +1568,11 @@ Net.on('state', msg => {
   } else if (msg.kind === 'timer' && !isHost) {
     mainTimer = msg.data.mainTimer; elapsed = msg.data.elapsed;
   } else if (msg.kind === 'scores') {
-    playerScores = msg.data;
+    playerScores = msg.data.scores;
+    mpCombo = msg.data.combo;
+    mpComboTimer = msg.data.comboTimer;
+    comboMilestone = msg.data.milestone;
+    comboMilestoneTimer = msg.data.milestoneTimer;
   }
 });
 
@@ -1587,8 +1628,10 @@ function startMultiplayerMatch(msg) {
 
   remotePlayers = new Map();
   playerScores = {};
+  mpCombo = 0; mpComboTimer = 0;
+  comboMilestone = ''; comboMilestoneTimer = 0;
   msg.players.forEach(p => {
-    playerScores[p.id] = { name: p.name, score: 0, combo: 0, comboTimer: 0 };
+    playerScores[p.id] = { name: p.name, score: 0 };
     if (p.id !== Net.playerId) {
       remotePlayers.set(p.id, { name: p.name, x: undefined, y: undefined, facing: 'S', hp: 100, maxHp: 100, weaponName: 'WEAPON_PISTOL' });
     }
@@ -1667,7 +1710,10 @@ function updateMultiplayerNet(dt) {
       amount: p.amount, weaponName: p.weaponName, category: p.category,
     })) });
     Net.send('state', { kind: 'timer', data: { mainTimer, elapsed } });
-    Net.send('state', { kind: 'scores', data: playerScores });
+    Net.send('state', { kind: 'scores', data: {
+      scores: playerScores, combo: mpCombo, comboTimer: mpComboTimer,
+      milestone: comboMilestone, milestoneTimer: comboMilestoneTimer,
+    }});
 
     const allDowned = mpDowned && Array.from(remotePlayers.values()).every(rp => rp.hp <= 0);
     if (allDowned) endMultiplayerMatch();
@@ -2051,14 +2097,14 @@ function updateTimers(dt) {
   }
 
   if (STATE === 'mpPlaying') {
-    // Each player has an independent combo timer even though the enemy pool
-    // is shared — host is authoritative for all of them.
-    Object.values(playerScores).forEach(ps => {
-      if (ps.comboTimer > 0) {
-        ps.comboTimer -= dt * 1000;
-        if (ps.comboTimer <= 0) { ps.combo = 0; ps.comboTimer = 0; }
-      }
-    });
+    // Shared team combo timer — host-authoritative, decays the same way the
+    // single-player combo does, just broadcast to everyone else instead of
+    // being purely local.
+    if (mpComboTimer > 0) {
+      mpComboTimer -= dt * 1000;
+      if (mpComboTimer <= 0) { mpCombo = 0; mpComboTimer = 0; }
+    }
+    if (comboMilestoneTimer > 0) comboMilestoneTimer -= dt * 1000;
   } else {
     comboTimer -= dt * 1000;
     if (comboTimer <= 0 && combo > 0) {
