@@ -484,7 +484,14 @@ const SOUNDS = {
     // as a real mixer.
     const chVol = parseInt(localStorage.getItem('sound_' + name + '_' + kind + '_vol'));
     const channelVolume = Number.isFinite(chVol) ? chVol : 100;
-    const a = new Audio(url);
+    // crossOrigin must be set BEFORE src — the audio file can live on a
+    // different host than this page, and setting it after the constructor
+    // has already assigned src (via `new Audio(url)`) is unreliable: the
+    // browser may have already started a non-CORS fetch, which
+    // createMediaElementSource() then silently mutes instead of erroring.
+    const a = new Audio();
+    a.crossOrigin = 'anonymous';
+    a.src = url;
     a.volume = (getSfxVolume() / 100) * (channelVolume / 100);
 
     const startTime = parseFloat(localStorage.getItem('sound_' + name + '_' + kind + '_start'));
@@ -622,9 +629,11 @@ const Music = {
     // track's own volume, set in devtool.html's mixer).
     const trackVolume = Number.isFinite(track.volume) ? track.volume : 100;
     this.currentTrackVolume = trackVolume;
-    const audio = new Audio(track.url);
-    audio.volume = (getMusicVolume() / 100) * (trackVolume / 100);
+    // crossOrigin must be set BEFORE src (see SOUNDS.play()'s comment).
+    const audio = new Audio();
     audio.crossOrigin = 'anonymous';
+    audio.src = track.url;
+    audio.volume = (getMusicVolume() / 100) * (trackVolume / 100);
 
     // Trim silence/intro — devtool.html's Start Time knob.
     const startTime = Number.isFinite(track.startTime) ? track.startTime : 0;
