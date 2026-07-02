@@ -61,11 +61,13 @@
   /* ── SPRITE SLOT ── */
   .slot-row {
     background:var(--surface); border:1px solid var(--border);
-    margin-bottom:10px; display:flex; align-items:stretch; gap:0;
+    margin-bottom:10px; display:flex; flex-direction:column;
     transition: border-color .15s;
   }
   .slot-row:hover { border-color:var(--border2); }
   .slot-row.has-custom { border-color:var(--green-dim); }
+  .slot-row-main { display:flex; align-items:stretch; gap:0; }
+  .slot-sound-sliders { border-top:1px solid var(--border); padding:8px 12px; }
 
   .slot-preview {
     width:72px; height:72px; flex-shrink:0;
@@ -284,12 +286,8 @@
     </div>
     <div id="soundtrack-gameplay-list"></div>
 
-    <div class="section-title" style="margin-top:20px;">&gt; <span>MIXER</span> // per-sound volume, grouped by bus</div>
+    <div class="section-title" style="margin-top:20px;">&gt; <span>MUSIC MIXER</span> // per-track volume/filters, grouped by bus. Sound effect faders live under each sprite below.</div>
     <div id="mixer-panel">
-      <div class="mixer-bus">
-        <div class="mixer-bus-title">SFX BUS</div>
-        <div id="mixer-sfx-list"></div>
-      </div>
       <div class="mixer-bus">
         <div class="mixer-bus-title">MENU MUSIC BUS</div>
         <div id="mixer-menu-list"></div>
@@ -1085,6 +1083,7 @@ function buildCompassRose(container) {
   soundLbl.textContent = 'SOUNDS';
   wrap.appendChild(soundLbl);
   wrap.appendChild(buildSoundSlots('PLAYER', ['damage', 'death']));
+  wrap.appendChild(buildSoundSliders('PLAYER', ['damage', 'death']));
 
   container.appendChild(wrap);
   updateCompassDetail();
@@ -1147,8 +1146,11 @@ function buildSlotRow(name, container) {
   div.className = 'slot-row' + (isCustom(name) ? ' has-custom' : '');
   div.id = 'slot-' + name;
 
+  const mainRow = document.createElement('div');
+  mainRow.className = 'slot-row-main';
+
   // Click to select + show constants
-  div.addEventListener('click', e => {
+  mainRow.addEventListener('click', e => {
     if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
     selectSlot(name);
   });
@@ -1177,13 +1179,11 @@ function buildSlotRow(name, container) {
 
   // Sound effects — enemies get all three; weapons get an attack sound;
   // pickups get a spawn (dropped from an enemy) and pickup (collected) sound.
-  if (SPRITE_GROUPS.enemies.includes(name)) {
-    info.appendChild(buildSoundSlots(name, ['attack', 'damage', 'death']));
-  } else if (weaponCategory(name)) {
-    info.appendChild(buildSoundSlots(name, ['attack']));
-  } else if (SPRITE_GROUPS.pickups.includes(name)) {
-    info.appendChild(buildSoundSlots(name, ['spawn', 'pickup']));
-  }
+  let soundKinds = null;
+  if (SPRITE_GROUPS.enemies.includes(name)) soundKinds = ['attack', 'damage', 'death'];
+  else if (weaponCategory(name)) soundKinds = ['attack'];
+  else if (SPRITE_GROUPS.pickups.includes(name)) soundKinds = ['spawn', 'pickup'];
+  if (soundKinds) info.appendChild(buildSoundSlots(name, soundKinds));
 
   // Actions
   const actions = document.createElement('div');
@@ -1231,7 +1231,9 @@ function buildSlotRow(name, container) {
     actions.appendChild(activeToggle.label);
   }
 
-  div.appendChild(previewWrap); div.appendChild(info); div.appendChild(actions);
+  mainRow.appendChild(previewWrap); mainRow.appendChild(info); mainRow.appendChild(actions);
+  div.appendChild(mainRow);
+  if (soundKinds) div.appendChild(buildSoundSliders(name, soundKinds));
   container.appendChild(div);
 
   updateSlotPreview(name);
@@ -1721,7 +1723,6 @@ function clearSound(name, kind) {
   localStorage.removeItem('sound_' + name + '_' + kind + '_hp');
   localStorage.removeItem('sound_' + name + '_' + kind + '_lp');
   refreshSoundSlotUI(name, kind);
-  renderMixer();
   setStatus('Cleared ' + kind + ' sound for ' + name);
 }
 
@@ -1735,7 +1736,8 @@ function renderSoundSlotContent(el, name, kind) {
 function refreshSoundSlotUI(name, kind) {
   const el = document.getElementById('sound-slot-' + name + '-' + kind);
   if (el) renderSoundSlotContent(el, name, kind);
-  renderMixer();
+  const slidersContainer = document.getElementById('sound-sliders-' + name);
+  if (slidersContainer) renderSoundSliders(slidersContainer, name, kindsForSoundName(name));
 }
 
 function buildSoundSlots(name, kinds) {
@@ -1804,52 +1806,68 @@ function renderMixerRow(container, label, opts) {
   container.appendChild(row);
 }
 
+// Builds one Volume/Start Time/High-Pass/Low-Pass group for a single sound
+// channel (name+kind) — used to render the sliders directly under whichever
+// sprite this sound belongs to, instead of a separate global SFX bus.
+function renderSoundChannelGroup(container, name, kind) {
+  const group = document.createElement('div');
+  group.className = 'mixer-track-group';
+  const title = document.createElement('div');
+  title.className = 'mixer-track-title';
+  title.textContent = kind.charAt(0).toUpperCase() + kind.slice(1);
+  group.appendChild(title);
+
+  renderMixerRow(group, 'Volume', {
+    min: 0, max: 100, initialValue: getSoundVolume(name, kind),
+    onChange: v => setSoundVolume(name, kind, v),
+  });
+  renderMixerRow(group, 'Start Time', {
+    min: 0, max: 30, step: 0.1,
+    initialValue: getSoundStartTime(name, kind),
+    format: v => Number(v).toFixed(1) + 's',
+    onChange: v => setSoundStartTime(name, kind, v),
+  });
+  renderMixerRow(group, 'High-Pass', {
+    min: 0, max: 100, step: 1,
+    initialValue: freqToSlider(getSoundHighpass(name, kind)),
+    format: v => sliderToFreq(v) + ' Hz',
+    onChange: v => setSoundHighpass(name, kind, sliderToFreq(v)),
+  });
+  renderMixerRow(group, 'Low-Pass', {
+    min: 0, max: 100, step: 1,
+    initialValue: freqToSlider(getSoundLowpass(name, kind)),
+    format: v => sliderToFreq(v) + ' Hz',
+    onChange: v => setSoundLowpass(name, kind, sliderToFreq(v)),
+  });
+
+  container.appendChild(group);
+}
+
+// Renders every kind in `kinds` that currently has a sound uploaded, as
+// full slider groups. Re-run whenever a sound for this sprite is
+// uploaded/cleared so groups appear/disappear live.
+function renderSoundSliders(container, name, kinds) {
+  container.innerHTML = '';
+  kinds.forEach(kind => {
+    if (hasSound(name, kind)) renderSoundChannelGroup(container, name, kind);
+  });
+}
+
+// name -> its full kind list, e.g. 'ENEMY_BASIC' -> ['attack','damage','death'].
+function kindsForSoundName(name) {
+  const entry = allSoundEntities().find(([n]) => n === name);
+  return entry ? entry[1] : [];
+}
+
+function buildSoundSliders(name, kinds) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slot-sound-sliders';
+  wrap.id = 'sound-sliders-' + name;
+  renderSoundSliders(wrap, name, kinds);
+  return wrap;
+}
+
 function renderMixer() {
-  const sfxContainer = document.getElementById('mixer-sfx-list');
-  if (sfxContainer) {
-    sfxContainer.innerHTML = '';
-    let any = false;
-    allSoundEntities().forEach(([name, kinds]) => {
-      kinds.forEach(kind => {
-        if (!hasSound(name, kind)) return;
-        any = true;
-
-        const group = document.createElement('div');
-        group.className = 'mixer-track-group';
-        const title = document.createElement('div');
-        title.className = 'mixer-track-title';
-        title.textContent = name + ' — ' + kind;
-        group.appendChild(title);
-
-        renderMixerRow(group, 'Volume', {
-          min: 0, max: 100, initialValue: getSoundVolume(name, kind),
-          onChange: v => setSoundVolume(name, kind, v),
-        });
-        renderMixerRow(group, 'Start Time', {
-          min: 0, max: 30, step: 0.1,
-          initialValue: getSoundStartTime(name, kind),
-          format: v => Number(v).toFixed(1) + 's',
-          onChange: v => setSoundStartTime(name, kind, v),
-        });
-        renderMixerRow(group, 'High-Pass', {
-          min: 0, max: 100, step: 1,
-          initialValue: freqToSlider(getSoundHighpass(name, kind)),
-          format: v => sliderToFreq(v) + ' Hz',
-          onChange: v => setSoundHighpass(name, kind, sliderToFreq(v)),
-        });
-        renderMixerRow(group, 'Low-Pass', {
-          min: 0, max: 100, step: 1,
-          initialValue: freqToSlider(getSoundLowpass(name, kind)),
-          format: v => sliderToFreq(v) + ' Hz',
-          onChange: v => setSoundLowpass(name, kind, sliderToFreq(v)),
-        });
-
-        sfxContainer.appendChild(group);
-      });
-    });
-    if (!any) sfxContainer.innerHTML = '<div class="mixer-empty">No sound effects uploaded yet.</div>';
-  }
-
   ['menu', 'gameplay'].forEach(playlist => {
     const container = document.getElementById('mixer-' + playlist + '-list');
     if (!container) return;
