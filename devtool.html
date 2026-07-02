@@ -1681,6 +1681,30 @@ function setSoundVolume(name, kind, v) {
   localStorage.setItem('sound_' + name + '_' + kind + '_vol', Math.max(0, Math.min(100, Math.round(v))));
 }
 
+// Same Start Time / High-Pass / Low-Pass knobs the music tracks have, per
+// individual sound effect channel.
+function getSoundStartTime(name, kind) {
+  const v = parseFloat(localStorage.getItem('sound_' + name + '_' + kind + '_start'));
+  return Number.isFinite(v) ? v : 0;
+}
+function setSoundStartTime(name, kind, v) {
+  localStorage.setItem('sound_' + name + '_' + kind + '_start', Math.max(0, v));
+}
+function getSoundHighpass(name, kind) {
+  const v = parseInt(localStorage.getItem('sound_' + name + '_' + kind + '_hp'));
+  return Number.isFinite(v) ? v : 20;
+}
+function setSoundHighpass(name, kind, v) {
+  localStorage.setItem('sound_' + name + '_' + kind + '_hp', v);
+}
+function getSoundLowpass(name, kind) {
+  const v = parseInt(localStorage.getItem('sound_' + name + '_' + kind + '_lp'));
+  return Number.isFinite(v) ? v : 20000;
+}
+function setSoundLowpass(name, kind, v) {
+  localStorage.setItem('sound_' + name + '_' + kind + '_lp', v);
+}
+
 function triggerSoundUpload(name, kind) {
   audioFileInput.multiple = false;
   audioFileInput.dataset.mode = 'sound';
@@ -1693,6 +1717,9 @@ function triggerSoundUpload(name, kind) {
 function clearSound(name, kind) {
   localStorage.removeItem('sound_' + name + '_' + kind);
   localStorage.removeItem('sound_' + name + '_' + kind + '_vol');
+  localStorage.removeItem('sound_' + name + '_' + kind + '_start');
+  localStorage.removeItem('sound_' + name + '_' + kind + '_hp');
+  localStorage.removeItem('sound_' + name + '_' + kind + '_lp');
   refreshSoundSlotUI(name, kind);
   renderMixer();
   setStatus('Cleared ' + kind + ' sound for ' + name);
@@ -1786,10 +1813,38 @@ function renderMixer() {
       kinds.forEach(kind => {
         if (!hasSound(name, kind)) return;
         any = true;
-        renderMixerRow(sfxContainer, name + ' — ' + kind, {
+
+        const group = document.createElement('div');
+        group.className = 'mixer-track-group';
+        const title = document.createElement('div');
+        title.className = 'mixer-track-title';
+        title.textContent = name + ' — ' + kind;
+        group.appendChild(title);
+
+        renderMixerRow(group, 'Volume', {
           min: 0, max: 100, initialValue: getSoundVolume(name, kind),
           onChange: v => setSoundVolume(name, kind, v),
         });
+        renderMixerRow(group, 'Start Time', {
+          min: 0, max: 30, step: 0.1,
+          initialValue: getSoundStartTime(name, kind),
+          format: v => Number(v).toFixed(1) + 's',
+          onChange: v => setSoundStartTime(name, kind, v),
+        });
+        renderMixerRow(group, 'High-Pass', {
+          min: 0, max: 100, step: 1,
+          initialValue: freqToSlider(getSoundHighpass(name, kind)),
+          format: v => sliderToFreq(v) + ' Hz',
+          onChange: v => setSoundHighpass(name, kind, sliderToFreq(v)),
+        });
+        renderMixerRow(group, 'Low-Pass', {
+          min: 0, max: 100, step: 1,
+          initialValue: freqToSlider(getSoundLowpass(name, kind)),
+          format: v => sliderToFreq(v) + ' Hz',
+          onChange: v => setSoundLowpass(name, kind, sliderToFreq(v)),
+        });
+
+        sfxContainer.appendChild(group);
       });
     });
     if (!any) sfxContainer.innerHTML = '<div class="mixer-empty">No sound effects uploaded yet.</div>';
@@ -2485,6 +2540,9 @@ function applyServerConfigToLocalStorage(cfg) {
       Object.entries(kinds).forEach(([kind, entry]) => {
         localStorage.setItem('sound_' + name + '_' + kind, entry.url);
         localStorage.setItem('sound_' + name + '_' + kind + '_vol', Number.isFinite(entry.volume) ? entry.volume : 100);
+        localStorage.setItem('sound_' + name + '_' + kind + '_start', Number.isFinite(entry.startTime) ? entry.startTime : 0);
+        localStorage.setItem('sound_' + name + '_' + kind + '_hp', Number.isFinite(entry.highpass) ? entry.highpass : 20);
+        localStorage.setItem('sound_' + name + '_' + kind + '_lp', Number.isFinite(entry.lowpass) ? entry.lowpass : 20000);
       });
     });
   }
@@ -2545,7 +2603,13 @@ function gatherPublishConfig() {
     const kinds = {};
     kindList.forEach(kind => {
       const url = localStorage.getItem('sound_' + name + '_' + kind);
-      if (url) kinds[kind] = { url, volume: getSoundVolume(name, kind) };
+      if (url) kinds[kind] = {
+        url,
+        volume: getSoundVolume(name, kind),
+        startTime: getSoundStartTime(name, kind),
+        highpass: getSoundHighpass(name, kind),
+        lowpass: getSoundLowpass(name, kind),
+      };
     });
     if (Object.keys(kinds).length) sounds[name] = kinds;
   });

@@ -456,10 +456,25 @@ const SPRITES = {
   },
 };
 
+// Shared by SOUNDS and Music — one AudioContext for the whole page, since
+// every filtered sound (SFX or music) needs to route through the same
+// audio hardware output anyway.
+let sharedAudioCtx = null;
+function getAudioCtx() {
+  if (!sharedAudioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    sharedAudioCtx = new Ctx();
+  }
+  if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume().catch(() => {});
+  return sharedAudioCtx;
+}
+
 // Sound effects for the character (damage-taken/death), each enemy
 // (attack/damage/death), and each weapon (attack — swapping weapons via a
 // pickup mid-match changes which sound plays, so this reads localStorage
 // fresh on every call instead of caching names at boot like SPRITES does.
+// Each channel also carries the same Start Time / High-Pass / Low-Pass
+// knobs the music tracks have, set in devtool.html's mixer.
 const SOUNDS = {
   play(name, kind) {
     const url = localStorage.getItem('sound_' + name + '_' + kind);
@@ -471,6 +486,32 @@ const SOUNDS = {
     const channelVolume = Number.isFinite(chVol) ? chVol : 100;
     const a = new Audio(url);
     a.volume = (getSfxVolume() / 100) * (channelVolume / 100);
+
+    const startTime = parseFloat(localStorage.getItem('sound_' + name + '_' + kind + '_start'));
+    if (Number.isFinite(startTime) && startTime > 0) {
+      a.currentTime = startTime;
+      a.addEventListener('loadedmetadata', () => { a.currentTime = startTime; });
+    }
+
+    // One-shot playback — no need to track/tear down the filter chain like
+    // Music does; once the clip ends and `a` is no longer referenced, the
+    // whole graph (source + filters) becomes eligible for GC on its own.
+    try {
+      const hp = parseInt(localStorage.getItem('sound_' + name + '_' + kind + '_hp'));
+      const lp = parseInt(localStorage.getItem('sound_' + name + '_' + kind + '_lp'));
+      const ctx = getAudioCtx();
+      const source = ctx.createMediaElementSource(a);
+      const hpNode = ctx.createBiquadFilter();
+      hpNode.type = 'highpass';
+      hpNode.frequency.value = Number.isFinite(hp) ? hp : 20;
+      const lpNode = ctx.createBiquadFilter();
+      lpNode.type = 'lowpass';
+      lpNode.frequency.value = Number.isFinite(lp) ? lp : 20000;
+      source.connect(hpNode); hpNode.connect(lpNode); lpNode.connect(ctx.destination);
+    } catch(e) {
+      // Web Audio unavailable/blocked — fall back to plain <audio> playback.
+    }
+
     a.play().catch(() => {}); // ignore — autoplay can be blocked before the first user gesture
   },
 };
@@ -523,20 +564,10 @@ const Music = {
   currentTrackVolume: 100, // the currently-playing track's own mixer channel volume
   currentMode: null, // 'menu' | 'gameplay' | null (not started yet)
   started: false,
-  ctx: null, // shared AudioContext — every track routes through it for filtering
 
   load() {
     try { this.menuTracks = JSON.parse(localStorage.getItem('mercs_soundtrack_menu') || '[]'); } catch(e) { this.menuTracks = []; }
     try { this.gameplayTracks = JSON.parse(localStorage.getItem('mercs_soundtrack_gameplay') || '[]'); } catch(e) { this.gameplayTracks = []; }
-  },
-
-  _getCtx() {
-    if (!this.ctx) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new Ctx();
-    }
-    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
-    return this.ctx;
   },
 
   start() {
@@ -609,7 +640,7 @@ const Music = {
     // output, so the chain always exists even at default (no-op) cutoffs,
     // otherwise the track would be silent.
     try {
-      const ctx = this._getCtx();
+      const ctx = getAudioCtx();
       const source = ctx.createMediaElementSource(audio);
       const hp = ctx.createBiquadFilter();
       hp.type = 'highpass';
