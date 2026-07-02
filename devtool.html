@@ -105,7 +105,21 @@
     margin-bottom:6px; display:flex; align-items:center; gap:10px; padding:8px 12px;
   }
   .track-row .track-name { flex:1; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #soundtrack-empty { font-size:11px; color:var(--text-dim); }
+  .soundtrack-empty { font-size:11px; color:var(--text-dim); }
+
+  /* ── MIXER ── */
+  #mixer-panel { display:flex; flex-direction:column; gap:14px; }
+  .mixer-bus { background:var(--surface); border:1px solid var(--border); padding:10px 14px; }
+  .mixer-bus-title { font-family:var(--vt); font-size:14px; color:var(--amber); letter-spacing:1px; margin-bottom:8px; }
+  .mixer-row { display:flex; align-items:center; gap:10px; padding:4px 0; }
+  .mixer-row .mixer-label { flex:1; font-size:11px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mixer-row input[type=range] { width:140px; accent-color:var(--green); }
+  .mixer-row .mixer-val { width:56px; text-align:right; font-size:11px; color:var(--green); flex-shrink:0; }
+  .mixer-empty { font-size:11px; color:var(--text-dim); }
+  .mixer-track-group { border-top:1px solid var(--border); padding-top:8px; margin-top:8px; }
+  .mixer-track-group:first-child { border-top:none; padding-top:0; margin-top:0; }
+  .mixer-track-title { font-size:12px; color:var(--text); margin-bottom:2px; }
+  .mixer-track-group .mixer-row .mixer-label { flex:0 0 80px; }
 
   /* ── EQUIP TOGGLE ── */
   .equip-toggle {
@@ -269,6 +283,22 @@
       <button class="btn" id="btn-add-track-gameplay" style="font-size:11px; padding:3px 10px;">[ + Add Track(s) ]</button>
     </div>
     <div id="soundtrack-gameplay-list"></div>
+
+    <div class="section-title" style="margin-top:20px;">&gt; <span>MIXER</span> // per-sound volume, grouped by bus</div>
+    <div id="mixer-panel">
+      <div class="mixer-bus">
+        <div class="mixer-bus-title">SFX BUS</div>
+        <div id="mixer-sfx-list"></div>
+      </div>
+      <div class="mixer-bus">
+        <div class="mixer-bus-title">MENU MUSIC BUS</div>
+        <div id="mixer-menu-list"></div>
+      </div>
+      <div class="mixer-bus">
+        <div class="mixer-bus-title">GAMEPLAY MUSIC BUS</div>
+        <div id="mixer-gameplay-list"></div>
+      </div>
+    </div>
 
     <div class="section-title" style="margin-top:20px;">&gt; <span>CHARACTERS</span> // player</div>
     <div id="group-characters"></div>
@@ -1593,7 +1623,8 @@ function renderSoundtrackList(playlist) {
   const tracks = loadSoundtrack(playlist);
   container.innerHTML = '';
   if (tracks.length === 0) {
-    container.innerHTML = '<div id="soundtrack-empty">No tracks yet — add some to play shuffled ' + playlist + ' music for everyone.</div>';
+    container.innerHTML = '<div class="soundtrack-empty">No tracks yet — add some to play shuffled ' + playlist + ' music for everyone.</div>';
+    renderMixer();
     return;
   }
   tracks.forEach((t, i) => {
@@ -1616,13 +1647,38 @@ function renderSoundtrackList(playlist) {
     row.appendChild(name); row.appendChild(removeBtn);
     container.appendChild(row);
   });
+  renderMixer();
 }
 
 // ── Per-entity sound effect slots (attack / damage taken / death) ──
 // Shared by the character (name='PLAYER') and every enemy (name=enemy id).
 
+// Every possible (name, kinds) sound slot in the game — shared by the mixer
+// (which only shows channels that actually have a sound uploaded) and
+// gatherPublishConfig (which publishes whichever of these are set).
+function allSoundEntities() {
+  return [
+    ['PLAYER', ['damage', 'death']],
+    ...SPRITE_GROUPS.enemies.map(name => [name, ['attack', 'damage', 'death']]),
+    ...SPRITE_GROUPS.rangedWeapons.map(name => [name, ['attack']]),
+    ...SPRITE_GROUPS.meleeWeapons.map(name => [name, ['attack']]),
+    ...SPRITE_GROUPS.pickups.map(name => [name, ['spawn', 'pickup']]),
+  ];
+}
+
 function hasSound(name, kind) {
   return !!localStorage.getItem('sound_' + name + '_' + kind);
+}
+
+// Per-channel volume (0-100, default 100) — the mixer's SFX bus faders.
+// Combined with the player's own personal SFX volume slider in-game, same
+// gain-staging idea as a real mixer: bus fader × channel fader.
+function getSoundVolume(name, kind) {
+  const v = parseInt(localStorage.getItem('sound_' + name + '_' + kind + '_vol'));
+  return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 100;
+}
+function setSoundVolume(name, kind, v) {
+  localStorage.setItem('sound_' + name + '_' + kind + '_vol', Math.max(0, Math.min(100, Math.round(v))));
 }
 
 function triggerSoundUpload(name, kind) {
@@ -1636,7 +1692,9 @@ function triggerSoundUpload(name, kind) {
 
 function clearSound(name, kind) {
   localStorage.removeItem('sound_' + name + '_' + kind);
+  localStorage.removeItem('sound_' + name + '_' + kind + '_vol');
   refreshSoundSlotUI(name, kind);
+  renderMixer();
   setStatus('Cleared ' + kind + ' sound for ' + name);
 }
 
@@ -1650,6 +1708,7 @@ function renderSoundSlotContent(el, name, kind) {
 function refreshSoundSlotUI(name, kind) {
   const el = document.getElementById('sound-slot-' + name + '-' + kind);
   if (el) renderSoundSlotContent(el, name, kind);
+  renderMixer();
 }
 
 function buildSoundSlots(name, kinds) {
@@ -1667,6 +1726,123 @@ function buildSoundSlots(name, kinds) {
     wrap.appendChild(el);
   });
   return wrap;
+}
+
+// ── Mixer — every sound effect (SFX bus) and music track (Menu/Gameplay
+// buses) gets its own channel fader, in addition to that bus's overall
+// volume (the player's own Music/SFX Settings sliders in-game). Only shows
+// channels that actually exist — an unset sound slot has no fader. Each
+// track additionally gets a Start Time trim and High-Pass/Low-Pass filter
+// knobs (game.html applies these via a real Web Audio filter chain).
+
+// Filter knobs use a log-scale slider (0-100) mapped to 20Hz-20kHz — a linear
+// mapping would waste most of the slider on the inaudible-difference top
+// octave, where a log scale matches how filter cutoffs are actually felt.
+function freqToSlider(freq) {
+  const f = Math.max(20, Math.min(20000, freq));
+  return 100 * Math.log(f / 20) / Math.log(1000);
+}
+function sliderToFreq(sliderVal) {
+  return Math.round(20 * Math.pow(1000, sliderVal / 100));
+}
+
+// opts: { min, max, step, initialValue, format(v), onChange(v) } — format
+// defaults to a plain percentage, matching the original volume-only rows.
+function renderMixerRow(container, label, opts) {
+  const row = document.createElement('div');
+  row.className = 'mixer-row';
+
+  const lbl = document.createElement('span');
+  lbl.className = 'mixer-label';
+  lbl.textContent = label;
+  lbl.title = label;
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = opts.min; slider.max = opts.max; slider.step = opts.step || 1;
+  slider.value = opts.initialValue;
+
+  const format = opts.format || (v => v + '%');
+  const val = document.createElement('span');
+  val.className = 'mixer-val';
+  val.textContent = format(opts.initialValue);
+
+  slider.oninput = () => {
+    const v = parseFloat(slider.value);
+    opts.onChange(v);
+    val.textContent = format(v);
+  };
+
+  row.appendChild(lbl); row.appendChild(slider); row.appendChild(val);
+  container.appendChild(row);
+}
+
+function renderMixer() {
+  const sfxContainer = document.getElementById('mixer-sfx-list');
+  if (sfxContainer) {
+    sfxContainer.innerHTML = '';
+    let any = false;
+    allSoundEntities().forEach(([name, kinds]) => {
+      kinds.forEach(kind => {
+        if (!hasSound(name, kind)) return;
+        any = true;
+        renderMixerRow(sfxContainer, name + ' — ' + kind, {
+          min: 0, max: 100, initialValue: getSoundVolume(name, kind),
+          onChange: v => setSoundVolume(name, kind, v),
+        });
+      });
+    });
+    if (!any) sfxContainer.innerHTML = '<div class="mixer-empty">No sound effects uploaded yet.</div>';
+  }
+
+  ['menu', 'gameplay'].forEach(playlist => {
+    const container = document.getElementById('mixer-' + playlist + '-list');
+    if (!container) return;
+    container.innerHTML = '';
+    const tracks = loadSoundtrack(playlist);
+    if (tracks.length === 0) {
+      container.innerHTML = '<div class="mixer-empty">No tracks on this bus yet.</div>';
+      return;
+    }
+    tracks.forEach((t, i) => {
+      const group = document.createElement('div');
+      group.className = 'mixer-track-group';
+      const title = document.createElement('div');
+      title.className = 'mixer-track-title';
+      title.textContent = t.name || t.url;
+      group.appendChild(title);
+
+      function updateTrack(field, v) {
+        const list = loadSoundtrack(playlist);
+        if (list[i]) { list[i][field] = v; saveSoundtrack(playlist, list); }
+      }
+
+      renderMixerRow(group, 'Volume', {
+        min: 0, max: 100, initialValue: Number.isFinite(t.volume) ? t.volume : 100,
+        onChange: v => updateTrack('volume', v),
+      });
+      renderMixerRow(group, 'Start Time', {
+        min: 0, max: 180, step: 1,
+        initialValue: Number.isFinite(t.startTime) ? t.startTime : 0,
+        format: v => v + 's',
+        onChange: v => updateTrack('startTime', v),
+      });
+      renderMixerRow(group, 'High-Pass', {
+        min: 0, max: 100, step: 1,
+        initialValue: freqToSlider(Number.isFinite(t.highpass) ? t.highpass : 20),
+        format: v => sliderToFreq(v) + ' Hz',
+        onChange: v => updateTrack('highpass', sliderToFreq(v)),
+      });
+      renderMixerRow(group, 'Low-Pass', {
+        min: 0, max: 100, step: 1,
+        initialValue: freqToSlider(Number.isFinite(t.lowpass) ? t.lowpass : 20000),
+        format: v => sliderToFreq(v) + ' Hz',
+        onChange: v => updateTrack('lowpass', sliderToFreq(v)),
+      });
+
+      container.appendChild(group);
+    });
+  });
 }
 
 // === CLEAR / RESET ===
@@ -2306,8 +2482,9 @@ function applyServerConfigToLocalStorage(cfg) {
   }
   if (cfg.sounds) {
     Object.entries(cfg.sounds).forEach(([name, kinds]) => {
-      Object.entries(kinds).forEach(([kind, url]) => {
-        localStorage.setItem('sound_' + name + '_' + kind, url);
+      Object.entries(kinds).forEach(([kind, entry]) => {
+        localStorage.setItem('sound_' + name + '_' + kind, entry.url);
+        localStorage.setItem('sound_' + name + '_' + kind + '_vol', Number.isFinite(entry.volume) ? entry.volume : 100);
       });
     });
   }
@@ -2364,18 +2541,11 @@ function gatherPublishConfig() {
   if (Object.keys(soundtrack).length) cfg.soundtrack = soundtrack;
 
   const sounds = {};
-  const soundEntities = [
-    ['PLAYER', ['damage', 'death']],
-    ...SPRITE_GROUPS.enemies.map(name => [name, ['attack', 'damage', 'death']]),
-    ...SPRITE_GROUPS.rangedWeapons.map(name => [name, ['attack']]),
-    ...SPRITE_GROUPS.meleeWeapons.map(name => [name, ['attack']]),
-    ...SPRITE_GROUPS.pickups.map(name => [name, ['spawn', 'pickup']]),
-  ];
-  soundEntities.forEach(([name, kindList]) => {
+  allSoundEntities().forEach(([name, kindList]) => {
     const kinds = {};
     kindList.forEach(kind => {
       const url = localStorage.getItem('sound_' + name + '_' + kind);
-      if (url) kinds[kind] = url;
+      if (url) kinds[kind] = { url, volume: getSoundVolume(name, kind) };
     });
     if (Object.keys(kinds).length) sounds[name] = kinds;
   });
