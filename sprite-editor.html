@@ -79,9 +79,24 @@
 
   #status-msg { font-size:11px; color:var(--green); min-height:16px; }
   #missing-sprite { padding:40px; color:var(--text-dim); font-size:16px; text-align:center; }
+
+  /* ── AUTH GATE ── */
+  #auth-gate {
+    position:fixed; inset:0; background:var(--bg); z-index:2000;
+    display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px;
+    text-align:center; padding:20px;
+  }
+  #auth-gate-msg { font-family:var(--vt); font-size:22px; color:var(--green); letter-spacing:2px; }
+  #auth-gate-sub { font-size:13px; color:var(--text-dim); }
+  #auth-gate-sub a { color:var(--green); }
 </style>
 </head>
 <body>
+
+<div id="auth-gate">
+  <div id="auth-gate-msg">&gt; CHECKING ADMIN ACCESS...</div>
+  <div id="auth-gate-sub"></div>
+</div>
 
 <div id="topbar">
   <div class="logo">MERCS DEV</div>
@@ -159,17 +174,72 @@ function getSpriteSize(name) {
   return { w:16, h:16 };
 }
 
-const params = new URLSearchParams(location.search);
-const spriteName = params.get('sprite');
-
-if (!spriteName) {
-  document.getElementById('missing-sprite').style.display = 'block';
-} else {
-  document.getElementById('editor-wrap').style.display = 'block';
-  initEditor(spriteName);
+// Mirrors devtool.html's applyServerConfigToLocalStorage — this page is
+// standalone (no shared JS module system in this project), and only cares
+// about the sprites slice of the published config.
+function applyServerConfigToLocalStorage(cfg) {
+  if (!cfg || !cfg.sprites) return;
+  Object.entries(cfg.sprites).forEach(([name, entry]) => {
+    if (entry.type === 'anim') {
+      localStorage.setItem('sprite_' + name + '_frames', JSON.stringify(entry.frames));
+      localStorage.setItem('sprite_' + name + '_fps', entry.fps || 12);
+      localStorage.removeItem('sprite_' + name);
+    } else if (entry.type === 'image') {
+      localStorage.setItem('sprite_' + name, entry.url);
+      localStorage.removeItem('sprite_' + name + '_frames');
+    }
+  });
 }
 
-document.getElementById('btn-close-tab').onclick = () => window.close();
+function showAuthGate(msg, sub) {
+  document.getElementById('auth-gate').style.display = 'flex';
+  document.getElementById('auth-gate-msg').innerHTML = msg;
+  document.getElementById('auth-gate-sub').innerHTML = sub || '';
+}
+function hideAuthGate() {
+  document.getElementById('auth-gate').style.display = 'none';
+}
+
+// Only an authenticated admin can use this tool. Pulls the currently
+// published sprites first, so editing always starts from the live state.
+async function boot() {
+  let isAdminHere = false;
+  try {
+    const r = await fetch('/api/auth-check', { credentials: 'include' });
+    const d = await r.json();
+    isAdminHere = !!d.admin;
+  } catch(e) {}
+
+  if (!isAdminHere) {
+    showAuthGate('ACCESS DENIED', 'Log in as admin on the <a href="index.html">homepage</a> first.');
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/mercs-config');
+    const d = await r.json();
+    applyServerConfigToLocalStorage(d && d.config);
+  } catch(e) {}
+
+  hideAuthGate();
+  runApp();
+}
+
+function runApp() {
+  const params = new URLSearchParams(location.search);
+  const spriteName = params.get('sprite');
+
+  if (!spriteName) {
+    document.getElementById('missing-sprite').style.display = 'block';
+  } else {
+    document.getElementById('editor-wrap').style.display = 'block';
+    initEditor(spriteName);
+  }
+
+  document.getElementById('btn-close-tab').onclick = () => window.close();
+}
+
+boot();
 
 function initEditor(name) {
   const native = getSpriteSize(name);

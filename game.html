@@ -27,6 +27,62 @@
 <script>
 'use strict';
 
+(async function() {
+
+// Minimal loading state on canvas while we fetch the devtool-published config
+// from the server, so there isn't a blank flash before the rest of init runs.
+const __loadCanvas = document.getElementById('game-canvas');
+const __loadCtx = __loadCanvas.getContext('2d');
+__loadCtx.fillStyle = '#0d0b12';
+__loadCtx.fillRect(0, 0, __loadCanvas.width, __loadCanvas.height);
+__loadCtx.fillStyle = '#3ef83e';
+__loadCtx.font = '20px monospace';
+__loadCtx.textAlign = 'center';
+__loadCtx.fillText('LOADING...', __loadCanvas.width / 2, __loadCanvas.height / 2);
+
+// Mirrors devtool.html's applyServerConfigToLocalStorage — this page is
+// standalone (no shared JS module system in this project), so it's duplicated.
+// Pulls the admin's published devtool config into this browser's localStorage
+// before any of the config-reading code below executes, so every player's
+// game reflects the same live, admin-controlled config.
+function applyServerConfigToLocalStorage(cfg) {
+  if (!cfg) return;
+  if (cfg.constants)      localStorage.setItem('mercs_constants', JSON.stringify(cfg.constants));
+  if (cfg.map)             localStorage.setItem('mercs_map', JSON.stringify(cfg.map));
+  if (cfg.activeEnemies)  localStorage.setItem('mercs_active_enemies', JSON.stringify(cfg.activeEnemies));
+  if (cfg.lootPool)        localStorage.setItem('mercs_loot_pool', JSON.stringify(cfg.lootPool));
+  if (cfg.equippedRanged) localStorage.setItem('mercs_equipped_ranged', cfg.equippedRanged);
+  if (cfg.equippedMelee)  localStorage.setItem('mercs_equipped_melee', cfg.equippedMelee);
+  if (cfg.customWeapons)  localStorage.setItem('mercs_custom_weapons', JSON.stringify(cfg.customWeapons));
+  if (cfg.customEnemies)  localStorage.setItem('mercs_custom_enemies', JSON.stringify(cfg.customEnemies));
+  if (cfg.sprites) {
+    Object.entries(cfg.sprites).forEach(([name, entry]) => {
+      if (entry.type === 'anim') {
+        localStorage.setItem('sprite_' + name + '_frames', JSON.stringify(entry.frames));
+        localStorage.setItem('sprite_' + name + '_fps', entry.fps || 12);
+        localStorage.removeItem('sprite_' + name);
+      } else if (entry.type === 'image') {
+        localStorage.setItem('sprite_' + name, entry.url);
+        localStorage.removeItem('sprite_' + name + '_frames');
+      }
+    });
+  }
+  if (cfg.anchors) {
+    Object.entries(cfg.anchors).forEach(([wn, data]) => {
+      localStorage.setItem('weapon_' + wn + '_anchor', JSON.stringify(data));
+    });
+  }
+}
+
+try {
+  const r = await fetch('/api/mercs-config');
+  const d = await r.json();
+  applyServerConfigToLocalStorage(d && d.config);
+} catch(e) {
+  // Couldn't reach the server config — fall back to whatever's already in
+  // this browser's localStorage.
+}
+
 // === CONSTANTS ===
 
 const CW = 800, CH = 600; // fixed viewport/screen size — the world can be bigger
@@ -2158,6 +2214,8 @@ window.addEventListener('keydown', e => {
 });
 
 requestAnimationFrame(loop);
+
+})();
 </script>
 </body>
 </html>

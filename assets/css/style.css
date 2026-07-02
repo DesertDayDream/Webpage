@@ -94,6 +94,7 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 #mercs-btn,
+#devtool-btn,
 #admin-btn {
   background: none;
   border: 1px solid var(--border);
@@ -110,6 +111,10 @@ html, body {
 #mercs-btn:hover {
   border-color: var(--green-bright);
   color: var(--green-bright);
+}
+#devtool-btn:hover {
+  border-color: var(--accent-warm);
+  color: var(--accent-warm);
 }
 #admin-btn:hover {
   border-color: var(--amber);

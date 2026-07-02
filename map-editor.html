@@ -83,9 +83,24 @@
   }
 
   #status-msg { font-size:11px; color:var(--green); min-height:16px; }
+
+  /* ── AUTH GATE ── */
+  #auth-gate {
+    position:fixed; inset:0; background:var(--bg); z-index:2000;
+    display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px;
+    text-align:center; padding:20px;
+  }
+  #auth-gate-msg { font-family:var(--vt); font-size:22px; color:var(--green); letter-spacing:2px; }
+  #auth-gate-sub { font-size:13px; color:var(--text-dim); }
+  #auth-gate-sub a { color:var(--green); }
 </style>
 </head>
 <body>
+
+<div id="auth-gate">
+  <div id="auth-gate-msg">&gt; CHECKING ADMIN ACCESS...</div>
+  <div id="auth-gate-sub"></div>
+</div>
 
 <div id="topbar">
   <div class="logo">MERCS DEV</div>
@@ -152,6 +167,49 @@
 
 <script>
 'use strict';
+
+// Mirrors game.html's applyServerConfigToLocalStorage — duplicated since this
+// project has no shared JS module system. This tool only cares about the
+// map piece of the published config.
+function applyServerConfigToLocalStorage(cfg) {
+  if (cfg && cfg.map) localStorage.setItem('mercs_map', JSON.stringify(cfg.map));
+}
+
+function showAuthGate(msg, sub) {
+  document.getElementById('auth-gate').style.display = 'flex';
+  document.getElementById('auth-gate-msg').innerHTML = msg;
+  document.getElementById('auth-gate-sub').innerHTML = sub || '';
+}
+function hideAuthGate() {
+  document.getElementById('auth-gate').style.display = 'none';
+}
+
+// Only an authenticated admin can use this tool. Pulls the currently
+// published map first, so editing always starts from the live state.
+async function boot() {
+  let isAdminHere = false;
+  try {
+    const r = await fetch('/api/auth-check', { credentials: 'include' });
+    const d = await r.json();
+    isAdminHere = !!d.admin;
+  } catch(e) {}
+
+  if (!isAdminHere) {
+    showAuthGate('ACCESS DENIED', 'Log in as admin on the <a href="index.html">homepage</a> first.');
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/mercs-config');
+    const d = await r.json();
+    applyServerConfigToLocalStorage(d && d.config);
+  } catch(e) {}
+
+  hideAuthGate();
+  runMapEditor();
+}
+
+function runMapEditor() {
 
 // Mirrors game.html's map constants/loading — this page is standalone (no shared
 // JS module system in this project), so the small pieces are duplicated.
@@ -493,6 +551,10 @@ document.getElementById('btn-save').onclick = () => {
 document.getElementById('btn-close-tab').onclick = () => window.close();
 
 render();
+
+} // end runMapEditor()
+
+boot();
 </script>
 
 </body>

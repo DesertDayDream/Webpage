@@ -150,6 +150,16 @@
   /* ── MODAL ANCHOR ── */
   body { position:relative; }
 
+  /* ── AUTH GATE ── */
+  #auth-gate {
+    position:fixed; inset:0; background:var(--bg); z-index:2000;
+    display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px;
+    text-align:center; padding:20px;
+  }
+  #auth-gate-msg { font-family:var(--vt); font-size:22px; color:var(--green); letter-spacing:2px; }
+  #auth-gate-sub { font-size:13px; color:var(--text-dim); }
+  #auth-gate-sub a { color:var(--green); }
+
   /* ── COMPASS ROSE ── */
   .compass-rose { display:grid; grid-template-columns:repeat(3,72px); gap:4px; margin-bottom:12px; }
   .compass-cell {
@@ -220,11 +230,17 @@
 </head>
 <body>
 
+<div id="auth-gate">
+  <div id="auth-gate-msg">&gt; CHECKING ADMIN ACCESS...</div>
+  <div id="auth-gate-sub"></div>
+</div>
+
 <div id="topbar">
   <div class="logo">MERCS DEV</div>
   <div class="sub">&gt; sprite_manager.exe</div>
   <div class="spacer"></div>
   <button class="btn" id="btn-map-editor">[ Map Editor ]</button>
+  <button class="btn primary" id="btn-publish">[ Publish to Everyone ]</button>
   <button class="btn primary" id="btn-launch">[ Launch Game ]</button>
 </div>
 
@@ -2040,6 +2056,144 @@ document.getElementById('btn-map-editor').onclick = () => {
   window.open('map-editor.html', '_blank');
 };
 
+// === ADMIN GATE + PUBLISH (drives which config every player's game loads) ===
+//
+// This tool edits localStorage exactly as before — Publish is the only new
+// step, bundling everything into one config blob and pushing it to the
+// server so it takes effect for every player, not just this browser.
+
+// Mirrors game.html's applyServerConfigToLocalStorage — this page is
+// standalone (no shared JS module system in this project), so it's duplicated.
+function applyServerConfigToLocalStorage(cfg) {
+  if (!cfg) return;
+  if (cfg.constants)      localStorage.setItem('mercs_constants', JSON.stringify(cfg.constants));
+  if (cfg.map)             localStorage.setItem('mercs_map', JSON.stringify(cfg.map));
+  if (cfg.activeEnemies)  localStorage.setItem('mercs_active_enemies', JSON.stringify(cfg.activeEnemies));
+  if (cfg.lootPool)        localStorage.setItem('mercs_loot_pool', JSON.stringify(cfg.lootPool));
+  if (cfg.equippedRanged) localStorage.setItem('mercs_equipped_ranged', cfg.equippedRanged);
+  if (cfg.equippedMelee)  localStorage.setItem('mercs_equipped_melee', cfg.equippedMelee);
+  if (cfg.customWeapons)  localStorage.setItem('mercs_custom_weapons', JSON.stringify(cfg.customWeapons));
+  if (cfg.customEnemies)  localStorage.setItem('mercs_custom_enemies', JSON.stringify(cfg.customEnemies));
+  if (cfg.sprites) {
+    Object.entries(cfg.sprites).forEach(([name, entry]) => {
+      if (entry.type === 'anim') {
+        localStorage.setItem('sprite_' + name + '_frames', JSON.stringify(entry.frames));
+        localStorage.setItem('sprite_' + name + '_fps', entry.fps || 12);
+        localStorage.removeItem('sprite_' + name);
+      } else if (entry.type === 'image') {
+        localStorage.setItem('sprite_' + name, entry.url);
+        localStorage.removeItem('sprite_' + name + '_frames');
+      }
+    });
+  }
+  if (cfg.anchors) {
+    Object.entries(cfg.anchors).forEach(([wn, data]) => {
+      localStorage.setItem(ANCHOR_KEY(wn), JSON.stringify(data));
+    });
+  }
+}
+
+// Bundles every devtool-controlled localStorage key into one config blob —
+// everything Publish sends to the server. Only includes sprites that are
+// actually customized (skips anything still on its default programmatic shape).
+function gatherPublishConfig() {
+  const cfg = {};
+  const constants = localStorage.getItem('mercs_constants');
+  if (constants) cfg.constants = JSON.parse(constants);
+  const map = localStorage.getItem('mercs_map');
+  if (map) cfg.map = JSON.parse(map);
+  const activeEnemies = localStorage.getItem('mercs_active_enemies');
+  if (activeEnemies) cfg.activeEnemies = JSON.parse(activeEnemies);
+  const lootPool = localStorage.getItem('mercs_loot_pool');
+  if (lootPool) cfg.lootPool = JSON.parse(lootPool);
+  const equippedRanged = localStorage.getItem('mercs_equipped_ranged');
+  if (equippedRanged) cfg.equippedRanged = equippedRanged;
+  const equippedMelee = localStorage.getItem('mercs_equipped_melee');
+  if (equippedMelee) cfg.equippedMelee = equippedMelee;
+  const customWeapons = localStorage.getItem('mercs_custom_weapons');
+  if (customWeapons) cfg.customWeapons = JSON.parse(customWeapons);
+  const customEnemies = localStorage.getItem('mercs_custom_enemies');
+  if (customEnemies) cfg.customEnemies = JSON.parse(customEnemies);
+
+  const sprites = {};
+  BUILTIN_NAMES.forEach(name => {
+    const framesRaw = localStorage.getItem('sprite_' + name + '_frames');
+    const single = localStorage.getItem('sprite_' + name);
+    if (framesRaw) {
+      try {
+        sprites[name] = { type:'anim', frames: JSON.parse(framesRaw), fps: parseInt(localStorage.getItem('sprite_' + name + '_fps') || '12') };
+      } catch(e) {}
+    } else if (single) {
+      sprites[name] = { type:'image', url: single };
+    }
+  });
+  if (Object.keys(sprites).length) cfg.sprites = sprites;
+
+  const anchors = {};
+  Object.keys(ANCHOR_DEFAULTS).forEach(wn => {
+    const raw = localStorage.getItem(ANCHOR_KEY(wn));
+    if (raw) { try { anchors[wn] = JSON.parse(raw); } catch(e) {} }
+  });
+  if (Object.keys(anchors).length) cfg.anchors = anchors;
+
+  return cfg;
+}
+
+document.getElementById('btn-publish').onclick = () => {
+  setStatus('Publishing...');
+  fetch('/api/mercs-config', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config: gatherPublishConfig() }),
+  })
+  .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
+  .then(res => {
+    setStatus(res.ok
+      ? 'Published — live for all players (' + new Date().toLocaleTimeString() + ')'
+      : 'Publish failed: ' + (res.data && res.data.error || 'unknown error'));
+  })
+  .catch(e => { setStatus('Publish failed: ' + e.message); });
+};
+
+function showAuthGate(msg, sub) {
+  document.getElementById('auth-gate').style.display = 'flex';
+  document.getElementById('auth-gate-msg').innerHTML = msg;
+  document.getElementById('auth-gate-sub').innerHTML = sub || '';
+}
+function hideAuthGate() {
+  document.getElementById('auth-gate').style.display = 'none';
+}
+
+// Only an authenticated admin can even see this tool. Pulls the currently
+// published config first, so editing always starts from the live state
+// rather than whatever this browser happened to have lying around.
+async function bootstrapDevtool() {
+  let isAdminHere = false;
+  try {
+    const r = await fetch('/api/auth-check', { credentials: 'include' });
+    const d = await r.json();
+    isAdminHere = !!d.admin;
+  } catch(e) {}
+
+  if (!isAdminHere) {
+    showAuthGate('ACCESS DENIED', 'Log in as admin on the <a href="index.html">homepage</a> first.');
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/mercs-config');
+    const d = await r.json();
+    applyServerConfigToLocalStorage(d && d.config);
+  } catch(e) {
+    // Couldn't reach the published config — fall back to whatever's already
+    // in this browser's localStorage, same as game.html does.
+  }
+
+  hideAuthGate();
+  initDevtool();
+}
+
 // === SPRITE EDITOR HANDOFF ===
 
 // Renders the sprite's current look (custom image or default shape — via the same
@@ -2094,21 +2248,27 @@ function rebuildUI() {
   updateStats();
 }
 
-(function loadPersistedCustomWeapons() {
-  const custom = loadCustomWeaponsList();
-  (custom.ranged || []).forEach(id => registerWeapon('ranged', id));
-  (custom.melee  || []).forEach(id => registerWeapon('melee', id));
-})();
+// Runs once bootstrapDevtool() confirms admin access and has pulled the
+// currently published config into localStorage.
+function initDevtool() {
+  (function loadPersistedCustomWeapons() {
+    const custom = loadCustomWeaponsList();
+    (custom.ranged || []).forEach(id => registerWeapon('ranged', id));
+    (custom.melee  || []).forEach(id => registerWeapon('melee', id));
+  })();
 
-(function loadPersistedCustomEnemies() {
-  loadCustomEnemiesList().forEach(id => registerEnemy(id));
-})();
+  (function loadPersistedCustomEnemies() {
+    loadCustomEnemiesList().forEach(id => registerEnemy(id));
+  })();
 
-document.getElementById('btn-add-ranged').onclick = () => addWeapon('ranged');
-document.getElementById('btn-add-melee').onclick = () => addWeapon('melee');
-document.getElementById('btn-add-enemy').onclick = () => addEnemy();
+  document.getElementById('btn-add-ranged').onclick = () => addWeapon('ranged');
+  document.getElementById('btn-add-melee').onclick = () => addWeapon('melee');
+  document.getElementById('btn-add-enemy').onclick = () => addEnemy();
 
-rebuildUI();
+  rebuildUI();
+}
+
+bootstrapDevtool();
 </script>
 
 </body>

@@ -136,6 +136,23 @@ app.post('/api/upload', requireAuth, upload.single('file'), function(req, res) {
   res.json({ url: PUBLIC_URL + '/uploads/' + req.file.filename });
 });
 
+// GET /api/mercs-config → { config } — the published devtool config every
+// player's game.html loads on start. Public: every player needs to read it,
+// not just the admin.
+app.get('/api/mercs-config', function(req, res) {
+  var row = stmtGet.get('mercs_config');
+  res.json({ config: row ? JSON.parse(row.value) : null });
+});
+
+// POST /api/mercs-config ← { config }  [auth required] — publishes the
+// admin's devtool state (balance/map/enemies/loot/sprites/anchors) so it
+// takes effect for everyone, not just the admin's own browser.
+app.post('/api/mercs-config', requireAuth, function(req, res) {
+  if (!req.body || req.body.config === undefined) return res.status(400).json({ error: 'missing config' });
+  stmtUpsert.run('mercs_config', JSON.stringify(req.body.config));
+  res.json({ ok: true });
+});
+
 // ── MULTIPLAYER (WebSocket lobby + relay) ──
 //
 // Thin relay: this server doesn't understand game rules. It just tracks lobby
