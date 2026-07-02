@@ -359,6 +359,18 @@ function refreshPage(pgId) {
 // ── ADMIN AUTH ──
 function toggleAdmin() {
   if (isAdmin) { logoutAdmin(); return; }
+  pendingDevToolOpen = false;
+  openModal('modal-login');
+  setTimeout(function() { document.getElementById('pw-input').focus(); }, 100);
+}
+
+// Dev Tool button is always visible, but opening it requires the same admin
+// password as the admin toggle — reuses the same login modal/session so the
+// tool's own server-side auth-check passes once the modal succeeds.
+var pendingDevToolOpen = false;
+function openDevTool() {
+  if (isAdmin) { window.open('devtool.html', '_blank'); return; }
+  pendingDevToolOpen = true;
   openModal('modal-login');
   setTimeout(function() { document.getElementById('pw-input').focus(); }, 100);
 }
@@ -381,6 +393,7 @@ function doLogin() {
       err.textContent = '';
       closeModal('modal-login');
       applyAdminUI();
+      if (pendingDevToolOpen) { pendingDevToolOpen = false; window.open('devtool.html', '_blank'); }
     } else {
       err.textContent = '> ' + (res.data && res.data.error ? res.data.error : 'ACCESS DENIED');
       document.getElementById('pw-input').focus();
