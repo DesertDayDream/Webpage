@@ -219,6 +219,7 @@ const MAP_DEFAULTS = {
     {x:220, y:368, w:42, h:42},
     {x:538, y:368, w:42, h:42},
   ],
+  roads: [],
 };
 
 function borderWalls(w, h) {
@@ -240,6 +241,7 @@ function loadMapConfig() {
       width:  Math.max(CW, cfg.width  || MAP_DEFAULTS.width),
       height: Math.max(CH, cfg.height || MAP_DEFAULTS.height),
       walls: Array.isArray(cfg.walls) ? cfg.walls : MAP_DEFAULTS.walls,
+      roads: Array.isArray(cfg.roads) ? cfg.roads : MAP_DEFAULTS.roads,
       playerStart: cfg.playerStart || MAP_DEFAULTS.playerStart,
     };
   } catch(e) { return MAP_DEFAULTS; }
@@ -248,6 +250,7 @@ function loadMapConfig() {
 const MAP_CONFIG = loadMapConfig();
 const MAP_W = MAP_CONFIG.width, MAP_H = MAP_CONFIG.height;
 const WALLS = [...borderWalls(MAP_W, MAP_H), ...MAP_CONFIG.walls];
+const ROADS = MAP_CONFIG.roads || [];
 
 const HS_KEY = 'mercs_highscore'; // personal best marker — stays local/per-device, not part of the shared leaderboard
 // Both leaderboards are server-backed (GET/POST /api/leaderboard) so every
@@ -920,10 +923,16 @@ function mercsHash(a, b, c, d, salt) {
 const BUILDING_TYPES = ['hospital', 'apartment', 'city'];
 const WARTORN_CHANCE_PCT = 25;
 
+// A wall's `theme`/`wartorn` fields (set via map-editor.html's per-wall theme
+// picker) override the deterministic auto-pick below when present and not
+// 'auto'. Walls without these fields (old saved maps, randomly generated
+// ones) fall through to the same hash-based look as before — zero migration.
 function getWallVisual(w) {
+  const autoType = BUILDING_TYPES[mercsHash(w.x, w.y, w.w, w.h, 0) % 3];
+  const autoWartorn = mercsHash(w.x, w.y, w.w, w.h, 1) % 100 < WARTORN_CHANCE_PCT;
   return {
-    type: BUILDING_TYPES[mercsHash(w.x, w.y, w.w, w.h, 0) % 3],
-    wartorn: mercsHash(w.x, w.y, w.w, w.h, 1) % 100 < WARTORN_CHANCE_PCT,
+    type: (w.theme && w.theme !== 'auto') ? w.theme : autoType,
+    wartorn: (w.wartorn === 'yes') ? true : (w.wartorn === 'no') ? false : autoWartorn,
     variant: mercsHash(w.x, w.y, w.w, w.h, 2),
   };
 }
@@ -1078,6 +1087,38 @@ function drawBuildingWall(ctx, w, mapW, mapH, vx0, vx1, vy0, vy1) {
   if (vis.wartorn) drawWartornOverlay(ctx, w, vis.variant);
 }
 
+// Roads: straight, hand-drawn segments (map-editor.html's road tool), purely
+// decorative — never added to WALLS/collision, just painted onto the sand.
+const ROAD_WIDTH = 40;
+const ROAD_FILL = '#3a3630', ROAD_EDGE = '#26231f', ROAD_DASH = '#c8b878';
+
+function pointSegDist(px, py, x1, y1, x2, y2) {
+  const dx = x2-x1, dy = y2-y1;
+  const lenSq = dx*dx + dy*dy;
+  let t = lenSq > 0 ? ((px-x1)*dx + (py-y1)*dy) / lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = x1 + t*dx, cy = y1 + t*dy;
+  return Math.hypot(px-cx, py-cy);
+}
+
+function drawRoad(ctx, r) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = ROAD_EDGE;
+  ctx.lineWidth = ROAD_WIDTH + 4;
+  ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
+
+  ctx.strokeStyle = ROAD_FILL;
+  ctx.lineWidth = ROAD_WIDTH;
+  ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
+
+  ctx.save();
+  ctx.strokeStyle = ROAD_DASH;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([14, 10]);
+  ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
+  ctx.restore();
+}
+
 const PALM_CELL = 96, PALM_DENSITY_PCT = 35, PALM_PAD = 6;
 
 function rectsOverlapPad(a, b, pad) {
@@ -1152,6 +1193,17 @@ function drawMap(ctx) {
     }
   }
 
+  // Roads — decorative only, never added to collision. Culled to whatever
+  // segments actually touch the visible viewport (padded by half the road
+  // width so an edge-crossing road isn't dropped).
+  const roadPad = ROAD_WIDTH/2 + 2;
+  for (const r of ROADS) {
+    const rx0 = Math.min(r.x1, r.x2) - roadPad, rx1 = Math.max(r.x1, r.x2) + roadPad;
+    const ry0 = Math.min(r.y1, r.y2) - roadPad, ry1 = Math.max(r.y1, r.y2) + roadPad;
+    if (rx1 < vx0 || rx0 > vx1 || ry1 < vy0 || ry0 > vy1) continue;
+    drawRoad(ctx, r);
+  }
+
   // Palm trees — decorative only, never added to collision (WALLS).
   const pGx0 = Math.floor(vx0/PALM_CELL), pGx1 = Math.ceil(vx1/PALM_CELL);
   const pGy0 = Math.floor(vy0/PALM_CELL), pGy1 = Math.ceil(vy1/PALM_CELL);
@@ -1166,6 +1218,7 @@ function drawMap(ctx) {
       const treeBox = { x: px-9, y: py-9, w: 18, h: 18 };
       let blocked = false;
       for (const w of WALLS) { if (rectsOverlapPad(treeBox, w, PALM_PAD)) { blocked = true; break; } }
+      if (!blocked) for (const r of ROADS) { if (pointSegDist(px, py, r.x1, r.y1, r.x2, r.y2) < ROAD_WIDTH/2 + PALM_PAD) { blocked = true; break; } }
       if (!blocked) drawPalmTree(ctx, px, py, h);
     }
   }

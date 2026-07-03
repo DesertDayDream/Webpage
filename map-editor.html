@@ -76,10 +76,14 @@
   .wall-fields.open { display:block; }
   .wall-field-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
   .wall-field-row label { font-size:11px; color:var(--text-dim); width:16px; }
-  .wall-field-row input[type=number] {
+  .wall-field-row input[type=number], .wall-field-row select {
     flex:1; background:var(--surface); border:1px solid var(--border2); color:var(--text);
     font-family:var(--mono); font-size:12px; padding:4px 6px;
   }
+
+  .tool-row { display:flex; gap:6px; margin-bottom:10px; }
+  .tool-row .btn { flex:1; }
+  .btn.active { border-color:var(--green); color:var(--green); background:var(--green-dim); }
 
   #status-msg { font-size:11px; color:var(--green); min-height:16px; }
 
@@ -138,18 +142,46 @@
 
     <div>
       <div class="section-title">&gt; <span>TOOLS</span></div>
+      <div class="tool-row">
+        <button class="btn small active" id="btn-tool-wall">[ Draw Wall ]</button>
+        <button class="btn small" id="btn-tool-road">[ Draw Road ]</button>
+      </div>
       <div class="hint">
-        Drag on empty ground to draw a wall.<br>
-        Click a wall to select it, drag to move it.<br>
+        Drag on empty ground to draw with the active tool above.<br>
+        Click a wall or road to select it, drag to move it.<br>
         Drag the green marker to set the player's start position.<br>
-        Delete/Backspace removes the selected wall.
+        Delete/Backspace removes the current selection.
       </div>
       <div class="wall-fields" id="wall-fields">
         <div class="wall-field-row"><label>X</label><input type="number" id="wf-x"></div>
         <div class="wall-field-row"><label>Y</label><input type="number" id="wf-y"></div>
         <div class="wall-field-row"><label>W</label><input type="number" id="wf-w" min="8"></div>
         <div class="wall-field-row"><label>H</label><input type="number" id="wf-h" min="8"></div>
+        <div class="wall-field-row">
+          <label style="width:60px;">Theme</label>
+          <select id="wf-theme">
+            <option value="auto">Auto</option>
+            <option value="hospital">Hospital</option>
+            <option value="apartment">Apartment</option>
+            <option value="city">City</option>
+          </select>
+        </div>
+        <div class="wall-field-row">
+          <label style="width:60px;">War-Torn</label>
+          <select id="wf-wartorn">
+            <option value="auto">Auto</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
         <button class="btn small danger" id="btn-delete-wall" style="width:100%;">[ Delete Selected Wall ]</button>
+      </div>
+      <div class="wall-fields" id="road-fields">
+        <div class="wall-field-row"><label>X1</label><input type="number" id="rf-x1"></div>
+        <div class="wall-field-row"><label>Y1</label><input type="number" id="rf-y1"></div>
+        <div class="wall-field-row"><label>X2</label><input type="number" id="rf-x2"></div>
+        <div class="wall-field-row"><label>Y2</label><input type="number" id="rf-y2"></div>
+        <button class="btn small danger" id="btn-delete-road" style="width:100%;">[ Delete Selected Road ]</button>
       </div>
     </div>
 
@@ -245,10 +277,16 @@ function mercsHash(a, b, c, d, salt) {
 const BUILDING_TYPES = ['hospital', 'apartment', 'city'];
 const WARTORN_CHANCE_PCT = 25;
 
+// A wall's `theme`/`wartorn` fields (set via the THEME picker below when a
+// wall is selected) override the deterministic auto-pick when present and
+// not 'auto'. Walls without these fields (old saved maps, randomly
+// generated ones) fall through to the same hash-based look as before.
 function getWallVisual(w) {
+  const autoType = BUILDING_TYPES[mercsHash(w.x, w.y, w.w, w.h, 0) % 3];
+  const autoWartorn = mercsHash(w.x, w.y, w.w, w.h, 1) % 100 < WARTORN_CHANCE_PCT;
   return {
-    type: BUILDING_TYPES[mercsHash(w.x, w.y, w.w, w.h, 0) % 3],
-    wartorn: mercsHash(w.x, w.y, w.w, w.h, 1) % 100 < WARTORN_CHANCE_PCT,
+    type: (w.theme && w.theme !== 'auto') ? w.theme : autoType,
+    wartorn: (w.wartorn === 'yes') ? true : (w.wartorn === 'no') ? false : autoWartorn,
     variant: mercsHash(w.x, w.y, w.w, w.h, 2),
   };
 }
@@ -392,6 +430,45 @@ function drawBuildingWall(ctx, w, mapW, mapH, vx0, vx1, vy0, vy1) {
   if (vis.wartorn) drawWartornOverlay(ctx, w, vis.variant);
 }
 
+// Roads: straight, hand-drawn segments (the road tool below), purely
+// decorative — never added to collision, just painted onto the sand.
+const ROAD_WIDTH = 40;
+const ROAD_FILL = '#3a3630', ROAD_EDGE = '#26231f', ROAD_DASH = '#c8b878';
+
+function pointSegDist(px, py, x1, y1, x2, y2) {
+  const dx = x2-x1, dy = y2-y1;
+  const lenSq = dx*dx + dy*dy;
+  let t = lenSq > 0 ? ((px-x1)*dx + (py-y1)*dy) / lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = x1 + t*dx, cy = y1 + t*dy;
+  return Math.hypot(px-cx, py-cy);
+}
+
+function drawRoad(ctx, r, selected) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = ROAD_EDGE;
+  ctx.lineWidth = ROAD_WIDTH + 4;
+  ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
+
+  ctx.strokeStyle = ROAD_FILL;
+  ctx.lineWidth = ROAD_WIDTH;
+  ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
+
+  ctx.save();
+  ctx.strokeStyle = ROAD_DASH;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([14, 10]);
+  ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
+  ctx.restore();
+
+  if (selected) {
+    ctx.strokeStyle = '#3ef83e';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
+  }
+}
+
 const PALM_CELL = 96, PALM_DENSITY_PCT = 35, PALM_PAD = 6;
 
 function rectsOverlapPad(a, b, pad) {
@@ -430,6 +507,7 @@ const MAP_DEFAULTS = {
     {x:220, y:368, w:42, h:42},
     {x:538, y:368, w:42, h:42},
   ],
+  roads: [],
 };
 
 function loadMapConfig() {
@@ -441,6 +519,7 @@ function loadMapConfig() {
       width:  Math.max(CW, cfg.width  || MAP_DEFAULTS.width),
       height: Math.max(CH, cfg.height || MAP_DEFAULTS.height),
       walls: Array.isArray(cfg.walls) ? cfg.walls : JSON.parse(JSON.stringify(MAP_DEFAULTS.walls)),
+      roads: Array.isArray(cfg.roads) ? cfg.roads : [],
       playerStart: cfg.playerStart || { ...MAP_DEFAULTS.playerStart },
     };
   } catch(e) { return JSON.parse(JSON.stringify(MAP_DEFAULTS)); }
@@ -451,7 +530,9 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 // === State ===
 let map = loadMapConfig();
-let selectedIdx = -1; // index into map.walls, -1 = none selected
+let selectedType = null; // 'wall' | 'road' | null
+let selectedIdx = -1; // index into map.walls or map.roads, matching selectedType
+let activeTool = 'wall'; // 'wall' | 'road' — governs what dragging on empty ground creates
 
 const canvas = document.getElementById('map-canvas');
 const ctx = canvas.getContext('2d');
@@ -516,7 +597,10 @@ function render() {
     }
   }
 
-  // Palm trees — decorative only, checked against every wall (border + interior).
+  // Roads — decorative only, drawn on the sand before buildings/trees.
+  map.roads.forEach((r, i) => drawRoad(ctx, r, selectedType === 'road' && i === selectedIdx));
+
+  // Palm trees — decorative only, checked against every wall (border + interior) and every road.
   const allWalls = [...borderWalls(map.width, map.height), ...map.walls];
   const pGx1 = Math.ceil(map.width/PALM_CELL), pGy1 = Math.ceil(map.height/PALM_CELL);
   for (let cgy = 0; cgy < pGy1; cgy++) {
@@ -530,6 +614,7 @@ function render() {
       const treeBox = { x: px-9, y: py-9, w: 18, h: 18 };
       let blocked = false;
       for (const w of allWalls) { if (rectsOverlapPad(treeBox, w, PALM_PAD)) { blocked = true; break; } }
+      if (!blocked) for (const r of map.roads) { if (pointSegDist(px, py, r.x1, r.y1, r.x2, r.y2) < ROAD_WIDTH/2 + PALM_PAD) { blocked = true; break; } }
       if (!blocked) drawPalmTree(ctx, px, py, h);
     }
   }
@@ -540,15 +625,25 @@ function render() {
   ctx.globalAlpha = 1;
 
   // Interior walls — editable
-  map.walls.forEach((w, i) => drawWallBox(w, i === selectedIdx));
+  map.walls.forEach((w, i) => drawWallBox(w, selectedType === 'wall' && i === selectedIdx));
 
-  // In-progress rubber-band draw
+  // In-progress rubber-band draw (wall tool)
   if (drawPreview) {
     ctx.fillStyle = 'rgba(62,248,62,0.25)';
     ctx.strokeStyle = '#3ef83e';
     ctx.lineWidth = 1;
     ctx.fillRect(drawPreview.x, drawPreview.y, drawPreview.w, drawPreview.h);
     ctx.strokeRect(drawPreview.x+0.5, drawPreview.y+0.5, drawPreview.w, drawPreview.h);
+  }
+
+  // In-progress road draw (road tool)
+  if (roadPreview) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(62,248,62,0.6)';
+    ctx.lineWidth = ROAD_WIDTH;
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(roadPreview.x1, roadPreview.y1); ctx.lineTo(roadPreview.x2, roadPreview.y2); ctx.stroke();
+    ctx.restore();
   }
 
   // Player start marker
@@ -575,8 +670,8 @@ document.getElementById('btn-resize').onclick = () => {
   widthInput.value = w; heightInput.value = h;
   map.playerStart.x = clamp(map.playerStart.x, BORDER_THICKNESS+11, w-BORDER_THICKNESS-11);
   map.playerStart.y = clamp(map.playerStart.y, BORDER_THICKNESS+11, h-BORDER_THICKNESS-11);
-  selectedIdx = -1;
-  updateWallFields();
+  selectedType = null; selectedIdx = -1;
+  updateFieldsPanel();
   render();
 };
 
@@ -626,26 +721,50 @@ document.getElementById('btn-randomize').onclick = () => {
 
   map.walls = walls;
   map.playerStart = playerStart;
-  selectedIdx = -1;
-  updateWallFields();
+  selectedType = null; selectedIdx = -1;
+  updateFieldsPanel();
   render();
 };
 
-// === Selection / wall field panel ===
+// === Tool selector ===
+const toolBtns = { wall: document.getElementById('btn-tool-wall'), road: document.getElementById('btn-tool-road') };
+function setActiveTool(tool) {
+  activeTool = tool;
+  toolBtns.wall.classList.toggle('active', tool === 'wall');
+  toolBtns.road.classList.toggle('active', tool === 'road');
+}
+toolBtns.wall.onclick = () => setActiveTool('wall');
+toolBtns.road.onclick = () => setActiveTool('road');
+
+// === Selection / field panels ===
 const wallFieldsEl = document.getElementById('wall-fields');
 const wfX = document.getElementById('wf-x'), wfY = document.getElementById('wf-y');
 const wfW = document.getElementById('wf-w'), wfH = document.getElementById('wf-h');
+const wfTheme = document.getElementById('wf-theme'), wfWartorn = document.getElementById('wf-wartorn');
 
-function updateWallFields() {
-  if (selectedIdx === -1) { wallFieldsEl.classList.remove('open'); return; }
-  const w = map.walls[selectedIdx];
-  wallFieldsEl.classList.add('open');
-  wfX.value = w.x; wfY.value = w.y; wfW.value = w.w; wfH.value = w.h;
+const roadFieldsEl = document.getElementById('road-fields');
+const rfX1 = document.getElementById('rf-x1'), rfY1 = document.getElementById('rf-y1');
+const rfX2 = document.getElementById('rf-x2'), rfY2 = document.getElementById('rf-y2');
+
+function updateFieldsPanel() {
+  wallFieldsEl.classList.remove('open');
+  roadFieldsEl.classList.remove('open');
+  if (selectedType === 'wall') {
+    const w = map.walls[selectedIdx];
+    wallFieldsEl.classList.add('open');
+    wfX.value = w.x; wfY.value = w.y; wfW.value = w.w; wfH.value = w.h;
+    wfTheme.value = w.theme || 'auto';
+    wfWartorn.value = w.wartorn || 'auto';
+  } else if (selectedType === 'road') {
+    const r = map.roads[selectedIdx];
+    roadFieldsEl.classList.add('open');
+    rfX1.value = r.x1; rfY1.value = r.y1; rfX2.value = r.x2; rfY2.value = r.y2;
+  }
 }
 
 [wfX, wfY, wfW, wfH].forEach(input => {
   input.addEventListener('input', () => {
-    if (selectedIdx === -1) return;
+    if (selectedType !== 'wall') return;
     const w = map.walls[selectedIdx];
     w.x = parseInt(wfX.value) || 0;
     w.y = parseInt(wfY.value) || 0;
@@ -655,11 +774,40 @@ function updateWallFields() {
   });
 });
 
+wfTheme.addEventListener('change', () => {
+  if (selectedType !== 'wall') return;
+  map.walls[selectedIdx].theme = wfTheme.value;
+  render();
+});
+wfWartorn.addEventListener('change', () => {
+  if (selectedType !== 'wall') return;
+  map.walls[selectedIdx].wartorn = wfWartorn.value;
+  render();
+});
+
+[rfX1, rfY1, rfX2, rfY2].forEach(input => {
+  input.addEventListener('input', () => {
+    if (selectedType !== 'road') return;
+    const r = map.roads[selectedIdx];
+    r.x1 = parseInt(rfX1.value) || 0; r.y1 = parseInt(rfY1.value) || 0;
+    r.x2 = parseInt(rfX2.value) || 0; r.y2 = parseInt(rfY2.value) || 0;
+    render();
+  });
+});
+
 document.getElementById('btn-delete-wall').onclick = () => {
-  if (selectedIdx === -1) return;
+  if (selectedType !== 'wall') return;
   map.walls.splice(selectedIdx, 1);
-  selectedIdx = -1;
-  updateWallFields();
+  selectedType = null; selectedIdx = -1;
+  updateFieldsPanel();
+  render();
+};
+
+document.getElementById('btn-delete-road').onclick = () => {
+  if (selectedType !== 'road') return;
+  map.roads.splice(selectedIdx, 1);
+  selectedType = null; selectedIdx = -1;
+  updateFieldsPanel();
   render();
 };
 
@@ -680,14 +828,24 @@ function hitWall(x, y) {
   return -1;
 }
 
+function hitRoad(x, y) {
+  for (let i = map.roads.length - 1; i >= 0; i--) {
+    const r = map.roads[i];
+    if (pointSegDist(x, y, r.x1, r.y1, r.x2, r.y2) <= ROAD_WIDTH/2) return i;
+  }
+  return -1;
+}
+
 function hitPlayerStart(x, y) {
   return Math.hypot(x - map.playerStart.x, y - map.playerStart.y) <= 12;
 }
 
-let dragMode = null; // 'move-wall' | 'draw-wall' | 'move-start' | null
+let dragMode = null; // 'move-wall' | 'draw-wall' | 'move-road' | 'draw-road' | 'move-start' | null
 let dragOffset = { x:0, y:0 };
 let drawStart = null;
 let drawPreview = null;
+let roadOrig = null; // snapshot of the road being dragged, so both endpoints translate together
+let roadPreview = null;
 
 canvas.addEventListener('mousedown', e => {
   const { x, y } = getMapCoords(e);
@@ -697,21 +855,38 @@ canvas.addEventListener('mousedown', e => {
     return;
   }
 
-  const hit = hitWall(x, y);
-  if (hit !== -1) {
-    selectedIdx = hit;
-    updateWallFields();
+  const hitW = hitWall(x, y);
+  if (hitW !== -1) {
+    selectedType = 'wall'; selectedIdx = hitW;
+    updateFieldsPanel();
     dragMode = 'move-wall';
-    dragOffset = { x: x - map.walls[hit].x, y: y - map.walls[hit].y };
+    dragOffset = { x: x - map.walls[hitW].x, y: y - map.walls[hitW].y };
     render();
     return;
   }
 
-  selectedIdx = -1;
-  updateWallFields();
-  dragMode = 'draw-wall';
-  drawStart = { x, y };
-  drawPreview = { x, y, w:0, h:0 };
+  const hitR = hitRoad(x, y);
+  if (hitR !== -1) {
+    selectedType = 'road'; selectedIdx = hitR;
+    updateFieldsPanel();
+    dragMode = 'move-road';
+    dragOffset = { x, y };
+    roadOrig = { ...map.roads[hitR] };
+    render();
+    return;
+  }
+
+  selectedType = null; selectedIdx = -1;
+  updateFieldsPanel();
+  if (activeTool === 'road') {
+    dragMode = 'draw-road';
+    drawStart = { x, y };
+    roadPreview = { x1:x, y1:y, x2:x, y2:y };
+  } else {
+    dragMode = 'draw-wall';
+    drawStart = { x, y };
+    drawPreview = { x, y, w:0, h:0 };
+  }
   render();
 });
 
@@ -727,12 +902,22 @@ window.addEventListener('mousemove', e => {
     const w = map.walls[selectedIdx];
     w.x = clamp(snap(x - dragOffset.x), 0, map.width - w.w);
     w.y = clamp(snap(y - dragOffset.y), 0, map.height - w.h);
-    updateWallFields();
+    updateFieldsPanel();
     render();
   } else if (dragMode === 'draw-wall') {
     const x0 = Math.min(drawStart.x, x), x1 = Math.max(drawStart.x, x);
     const y0 = Math.min(drawStart.y, y), y1 = Math.max(drawStart.y, y);
     drawPreview = { x:x0, y:y0, w:x1-x0, h:y1-y0 };
+    render();
+  } else if (dragMode === 'move-road') {
+    const dx = snap(x - dragOffset.x), dy = snap(y - dragOffset.y);
+    const r = map.roads[selectedIdx];
+    r.x1 = roadOrig.x1 + dx; r.y1 = roadOrig.y1 + dy;
+    r.x2 = roadOrig.x2 + dx; r.y2 = roadOrig.y2 + dy;
+    updateFieldsPanel();
+    render();
+  } else if (dragMode === 'draw-road') {
+    roadPreview = { x1: drawStart.x, y1: drawStart.y, x2: x, y2: y };
     render();
   }
 });
@@ -747,22 +932,33 @@ window.addEventListener('mouseup', () => {
     y0 = clamp(y0, 0, map.height); y1 = clamp(y1, 0, map.height);
     if (x1 - x0 >= TS && y1 - y0 >= TS) {
       map.walls.push({ x:x0, y:y0, w:x1-x0, h:y1-y0 });
-      selectedIdx = map.walls.length - 1;
-      updateWallFields();
+      selectedType = 'wall'; selectedIdx = map.walls.length - 1;
+      updateFieldsPanel();
+    }
+  } else if (dragMode === 'draw-road' && roadPreview) {
+    const x1 = clamp(snap(roadPreview.x1), 0, map.width), y1 = clamp(snap(roadPreview.y1), 0, map.height);
+    const x2 = clamp(snap(roadPreview.x2), 0, map.width), y2 = clamp(snap(roadPreview.y2), 0, map.height);
+    if (Math.hypot(x2-x1, y2-y1) >= TS) {
+      map.roads.push({ x1, y1, x2, y2 });
+      selectedType = 'road'; selectedIdx = map.roads.length - 1;
+      updateFieldsPanel();
     }
   }
   dragMode = null;
   drawStart = null;
   drawPreview = null;
+  roadPreview = null;
+  roadOrig = null;
   render();
 });
 
 window.addEventListener('keydown', e => {
-  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdx !== -1) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedType) {
     e.preventDefault();
-    map.walls.splice(selectedIdx, 1);
-    selectedIdx = -1;
-    updateWallFields();
+    if (selectedType === 'wall') map.walls.splice(selectedIdx, 1);
+    else if (selectedType === 'road') map.roads.splice(selectedIdx, 1);
+    selectedType = null; selectedIdx = -1;
+    updateFieldsPanel();
     render();
   }
 });
@@ -772,9 +968,9 @@ document.getElementById('btn-reset-map').onclick = () => {
   if (!confirm('Reset to the default map? This clears your saved layout.')) return;
   localStorage.removeItem('mercs_map');
   map = JSON.parse(JSON.stringify(MAP_DEFAULTS));
-  selectedIdx = -1;
+  selectedType = null; selectedIdx = -1;
   widthInput.value = map.width; heightInput.value = map.height;
-  updateWallFields();
+  updateFieldsPanel();
   render();
 };
 
