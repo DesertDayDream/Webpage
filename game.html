@@ -1697,6 +1697,13 @@ function updateEnemies(dt) {
         const res = resolveWalls(nx, ny, e.def.size);
         e.x = res.nx; e.y = res.ny;
       }
+    } else if (e.targetX !== undefined) {
+      // Non-host MP client — smoothly glide toward the host's last-reported
+      // position instead of hard-snapping on every ~100ms hostState broadcast
+      // (same lerp rate/technique as updateRemotePlayers uses for other players).
+      const lerpRate = Math.min(1, 12 * dt);
+      e.x += (e.targetX - e.x) * lerpRate;
+      e.y += (e.targetY - e.y) * lerpRate;
     }
 
     // Contact damage — every client checks its own local player against
@@ -1863,14 +1870,26 @@ function spawnBullet() {
   const originY = player.y + anchor.y + Math.sin(aimAngle) * GUN_LENGTH;
   const spreadRad = EQUIPPED_RANGED.spreadAngle * Math.PI / 180;
 
+  const spawned = [];
   for (let i = 0; i < EQUIPPED_RANGED.pelletCount; i++) {
     const angle = spreadRad > 0 ? aimAngle + (Math.random() - 0.5) * spreadRad : aimAngle;
-    bullets.push({
+    const b = {
       x: originX, y: originY,
       dx: Math.cos(angle) * EQUIPPED_RANGED.bulletSpeed,
       dy: Math.sin(angle) * EQUIPPED_RANGED.bulletSpeed,
       distTravelled: 0,
-    });
+    };
+    bullets.push(b);
+    spawned.push(b);
+  }
+
+  // Let every other player see this shot — visual only, so it's just enough to
+  // draw the same trail; each shooter's own client still resolves its own hits.
+  if (STATE === 'mpPlaying') {
+    Net.send('state', { kind: 'shot', data: {
+      bullets: spawned.map(b => ({ x:b.x, y:b.y, dx:b.dx, dy:b.dy })),
+      range: EQUIPPED_RANGED.bulletRange,
+    }});
   }
 }
 
@@ -1908,11 +1927,31 @@ function updateBullets(dt) {
   }
 }
 
+// Other players' shots (see the 'shot' state handler) — purely visual, so no
+// enemy-collision loop here; each shooter's own client already resolves its own hits.
+function updateRemoteBullets(dt) {
+  for (let i = remoteBullets.length-1; i >= 0; i--) {
+    const b = remoteBullets[i];
+    b.x += b.dx * dt;
+    b.y += b.dy * dt;
+    b.distTravelled += Math.sqrt(b.dx*b.dx + b.dy*b.dy) * dt;
+    if (b.distTravelled > b.range || pointInWall(b.x, b.y) ||
+        b.x < 0 || b.x > MAP_W || b.y < 0 || b.y > MAP_H) {
+      remoteBullets.splice(i, 1);
+    }
+  }
+}
+
 function drawBullets(ctx) {
   ctx.fillStyle = '#f0e040';
   ctx.shadowColor = '#f0e040';
   ctx.shadowBlur = 6;
   for (const b of bullets) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, 3, 0, Math.PI*2);
+    ctx.fill();
+  }
+  for (const b of remoteBullets) {
     ctx.beginPath();
     ctx.arc(b.x, b.y, 3, 0, Math.PI*2);
     ctx.fill();
@@ -1955,6 +1994,14 @@ function doMelee() {
       dx: Math.cos(a)*30, dy: Math.sin(a)*30,
       color: '#f0c840', life:0.15, maxLife:0.15, size:4,
     });
+  }
+
+  // Let every other player see this swing — visual only, mirrors the local
+  // arc/particle burst above; each attacker's own client still resolves its own hits.
+  if (STATE === 'mpPlaying') {
+    Net.send('state', { kind: 'melee', data: {
+      angle: aimAngle, range: EQUIPPED_MELEE.meleeRange, duration: EQUIPPED_MELEE.meleeCd,
+    }});
   }
 }
 
@@ -2428,8 +2475,13 @@ let mpErrorUntil = 0;
 // mirrors. `isHost` decides who simulates enemies/pickups/timer for real;
 // everyone else just renders the host's broadcasts.
 let isHost = false;
-let remotePlayers = new Map(); // id -> { name, x, y, targetX, targetY, facing, hp, maxHp, weaponName, character }
+let remotePlayers = new Map(); // id -> { name, x, y, targetX, targetY, facing, hp, maxHp, weaponName, character, meleeSwingAngle, meleeSwingRange, meleeSwingDuration, meleeSwingTimer }
 let playerScores = {};         // id -> { name, score } — host-authoritative, per-player
+// Other players' shots, broadcast as a lightweight 'shot' state event per trigger
+// pull (see spawnBullet) — visual only. Damage is never derived from these; each
+// shooter's own client already resolves its own hits via the existing 'hit'
+// message, so these never run through enemy-collision logic like local `bullets` do.
+let remoteBullets = [];
 // This player's own character-editor.html customization (build/colors/outfit
 // params), if any — MP-only per-player cosmetic, not published to everyone
 // like devtool's sprites. Broadcast to teammates so they see it too; loaded
@@ -2491,7 +2543,22 @@ Net.on('state', msg => {
     // death sound instead of just the silent dissolve animation.
     const wasDead = new Set(enemies.filter(e => e.deathTimer >= 0).map(e => e.id));
     d.enemies.forEach(de => { if (de.deathTimer >= 0 && !wasDead.has(de.id)) SOUNDS.play(de.type, 'death'); });
-    enemies = d.enemies.map(de => Object.assign({}, de, { def: ENEMY_DEFS[de.type] || ENEMY_DEFS.ENEMY_BASIC }));
+
+    // Merge by id instead of fully replacing the array — keeps each enemy's
+    // currently-rendered x/y in place and just updates targetX/targetY, so
+    // updateEnemies() below can lerp toward the new position instead of the
+    // whole enemy population hard-snapping every ~100ms (this is the same
+    // smoothing remote players already get via updateRemotePlayers/targetX).
+    const prevById = new Map(enemies.map(e => [e.id, e]));
+    enemies = d.enemies.map(de => {
+      const prev = prevById.get(de.id);
+      const e = Object.assign({}, de, {
+        def: ENEMY_DEFS[de.type] || ENEMY_DEFS.ENEMY_BASIC,
+        targetX: de.x, targetY: de.y,
+      });
+      if (prev) { e.x = prev.x; e.y = prev.y; }
+      return e;
+    });
 
     // Same idea as the enemy-death diff above — pickups only ever spawn on
     // the host, so detect newly-appeared ones here to play a spawn sound.
@@ -2505,6 +2572,30 @@ Net.on('state', msg => {
     mpComboTimer = d.comboTimer;
     comboMilestone = d.milestone;
     comboMilestoneTimer = d.milestoneTimer;
+  } else if (msg.kind === 'shot') {
+    const d = msg.data;
+    SOUNDS.play((remotePlayers.get(msg.from) || {}).weaponName || 'WEAPON_PISTOL', 'attack');
+    (d.bullets || []).forEach(b => {
+      remoteBullets.push({ x:b.x, y:b.y, dx:b.dx, dy:b.dy, distTravelled:0, range:d.range });
+    });
+  } else if (msg.kind === 'melee') {
+    let rp = remotePlayers.get(msg.from);
+    if (!rp) { rp = {}; remotePlayers.set(msg.from, rp); }
+    rp.meleeSwingAngle = msg.data.angle;
+    rp.meleeSwingRange = msg.data.range;
+    rp.meleeSwingDuration = msg.data.duration;
+    rp.meleeSwingTimer = msg.data.duration;
+    if (rp.x !== undefined) {
+      for (let i = 0; i < 6; i++) {
+        const a = msg.data.angle - MELEE_ARC/2 + (i/5)*MELEE_ARC;
+        particles.push({
+          x: rp.x + Math.cos(a)*msg.data.range*0.5,
+          y: rp.y + Math.sin(a)*msg.data.range*0.5,
+          dx: Math.cos(a)*30, dy: Math.sin(a)*30,
+          color: '#f0c840', life:0.15, maxLife:0.15, size:4,
+        });
+      }
+    }
   }
 });
 
@@ -2622,6 +2713,7 @@ function endMultiplayerMatch() {
 function updateRemotePlayers(dt) {
   const lerpRate = Math.min(1, 12 * dt);
   remotePlayers.forEach(rp => {
+    if (rp.meleeSwingTimer > 0) rp.meleeSwingTimer -= dt * 1000;
     if (rp.targetX === undefined) return;
     rp.x += (rp.targetX - rp.x) * lerpRate;
     rp.y += (rp.targetY - rp.y) * lerpRate;
@@ -2641,6 +2733,19 @@ function drawRemotePlayers(ctx) {
     ctx.textAlign = 'center';
     ctx.fillText(rp.name || '', rp.x, rp.y - PLAYER_SIZE/2 - 6);
     ctx.textAlign = 'left';
+
+    // Melee arc indicator — mirrors the local player's version in drawPlayer().
+    if (rp.meleeSwingTimer > 0) {
+      const frac = rp.meleeSwingTimer / rp.meleeSwingDuration;
+      ctx.save();
+      ctx.globalAlpha = 0.25 * frac;
+      ctx.strokeStyle = '#f0c840';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rp.meleeSwingRange, rp.meleeSwingAngle - MELEE_ARC/2, rp.meleeSwingAngle + MELEE_ARC/2);
+      ctx.stroke();
+      ctx.restore();
+    }
   });
 }
 
@@ -3226,7 +3331,7 @@ function resetPlayerForMatch() {
   player.reloading = false; player.reloadTimer = 0;
   player.rawAngle = 0; player.facing = 'S'; player.meleeCd = 0; player.fireCd = 0;
   player.flashTimer = 0; player.invincible = 0;
-  enemies = []; bullets = []; pickups = []; particles = []; flashes = [];
+  enemies = []; bullets = []; remoteBullets = []; pickups = []; particles = []; flashes = [];
   mainTimer = 150; elapsed = 0;
   spawnTimer = 0; spawnRate = 3.0;
 }
@@ -3265,6 +3370,7 @@ function loop(now) {
     updateFlashes(dt);
     if (mpActive) {
       updateRemotePlayers(dt);
+      updateRemoteBullets(dt);
       updateMultiplayerNet(dt);
     }
   }
