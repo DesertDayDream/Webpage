@@ -887,6 +887,29 @@ function toggleLootPool(name, on) {
   saveLootPool(pool);
 }
 
+// === UNLIMITED AMMO (drives the "UNLIMITED" toggle on ranged weapon rows) ===
+
+const UNLIMITED_AMMO_KEY = 'mercs_unlimited_ammo';
+
+function loadUnlimitedAmmo() {
+  try { return JSON.parse(localStorage.getItem(UNLIMITED_AMMO_KEY) || '{}'); } catch(e) { return {}; }
+}
+
+function saveUnlimitedAmmo(data) {
+  localStorage.setItem(UNLIMITED_AMMO_KEY, JSON.stringify(data));
+}
+
+function isUnlimitedAmmo(name) {
+  return !!loadUnlimitedAmmo()[name];
+}
+
+function toggleUnlimitedAmmo(name, on) {
+  const data = loadUnlimitedAmmo();
+  if (on) data[name] = true;
+  else delete data[name];
+  saveUnlimitedAmmo(data);
+}
+
 function loadAnchorData(wn) {
   try {
     const raw = localStorage.getItem(ANCHOR_KEY(wn));
@@ -1220,6 +1243,16 @@ function buildSlotRow(name, container) {
     }, 'toggle-loot');
     lootToggle.label.title = 'Let this weapon drop from enemies as a pickup';
     actions.appendChild(lootToggle.label);
+  }
+
+  // Unlimited ammo toggle — ranged weapons only; melee has no ammo/reload concept
+  if (cat === 'ranged') {
+    const unlimitedToggle = makeToggle('UNLIMITED', isUnlimitedAmmo(name), checked => {
+      toggleUnlimitedAmmo(name, checked);
+      setStatus((checked ? 'Enabled' : 'Disabled') + ' unlimited ammo for ' + name);
+    }, 'toggle-unlimited');
+    unlimitedToggle.label.title = 'Never consume ammo or need to reload with this weapon equipped';
+    actions.appendChild(unlimitedToggle.label);
   }
 
   // Active toggle — only enemies can spawn in the game
@@ -2529,6 +2562,7 @@ function applyServerConfigToLocalStorage(cfg) {
   if (cfg.map)             localStorage.setItem('mercs_map', JSON.stringify(cfg.map));
   if (cfg.activeEnemies)  localStorage.setItem('mercs_active_enemies', JSON.stringify(cfg.activeEnemies));
   if (cfg.lootPool)        localStorage.setItem('mercs_loot_pool', JSON.stringify(cfg.lootPool));
+  if (cfg.unlimitedAmmo)  localStorage.setItem('mercs_unlimited_ammo', JSON.stringify(cfg.unlimitedAmmo));
   if (cfg.equippedRanged) localStorage.setItem('mercs_equipped_ranged', cfg.equippedRanged);
   if (cfg.equippedMelee)  localStorage.setItem('mercs_equipped_melee', cfg.equippedMelee);
   if (cfg.customWeapons)  localStorage.setItem('mercs_custom_weapons', JSON.stringify(cfg.customWeapons));
@@ -2580,6 +2614,8 @@ function gatherPublishConfig() {
   if (activeEnemies) cfg.activeEnemies = JSON.parse(activeEnemies);
   const lootPool = localStorage.getItem('mercs_loot_pool');
   if (lootPool) cfg.lootPool = JSON.parse(lootPool);
+  const unlimitedAmmo = localStorage.getItem('mercs_unlimited_ammo');
+  if (unlimitedAmmo) cfg.unlimitedAmmo = JSON.parse(unlimitedAmmo);
   const equippedRanged = localStorage.getItem('mercs_equipped_ranged');
   if (equippedRanged) cfg.equippedRanged = equippedRanged;
   const equippedMelee = localStorage.getItem('mercs_equipped_melee');
