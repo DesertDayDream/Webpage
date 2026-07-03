@@ -58,6 +58,7 @@ function applyServerConfigToLocalStorage(cfg) {
   if (cfg.map)             localStorage.setItem('mercs_map', JSON.stringify(cfg.map));
   if (cfg.activeEnemies)  localStorage.setItem('mercs_active_enemies', JSON.stringify(cfg.activeEnemies));
   if (cfg.lootPool)        localStorage.setItem('mercs_loot_pool', JSON.stringify(cfg.lootPool));
+  if (cfg.unlimitedAmmo)  localStorage.setItem('mercs_unlimited_ammo', JSON.stringify(cfg.unlimitedAmmo));
   if (cfg.equippedRanged) localStorage.setItem('mercs_equipped_ranged', cfg.equippedRanged);
   if (cfg.equippedMelee)  localStorage.setItem('mercs_equipped_melee', cfg.equippedMelee);
   if (cfg.customWeapons)  localStorage.setItem('mercs_custom_weapons', JSON.stringify(cfg.customWeapons));
@@ -136,6 +137,11 @@ const CONFIG = (function() {
   return c;
 })();
 
+// Unlimited ammo — set via the "UNLIMITED" toggle in devtool.html (mercs_unlimited_ammo).
+function loadUnlimitedAmmo() {
+  try { return JSON.parse(localStorage.getItem('mercs_unlimited_ammo') || '{}'); } catch(e) { return {}; }
+}
+
 // Equipped weapon — set via the "EQUIP" toggle in devtool.html (mercs_equipped_ranged/melee).
 // Custom weapons added in the devtool aren't in _C_DEFAULTS, so fall back to the
 // base weapon's stat shape and overlay whatever constants were saved under the
@@ -150,6 +156,11 @@ function resolveEquippedWeapon(category, overrideName) {
     if (saved[name]) Object.assign(cfg, saved[name]);
   } catch(e) {}
   cfg.name = name;
+  // Always assign an explicit boolean (never leave the key absent) — EQUIPPED_RANGED
+  // is mutated in place via Object.assign at other call sites (weapon pickup swap,
+  // match reset), which only overwrites keys present on the source object. Leaving
+  // this out when false would let a stale unlimitedAmmo:true survive a weapon swap.
+  if (category === 'ranged') cfg.unlimitedAmmo = !!loadUnlimitedAmmo()[name];
   return cfg;
 }
 const EQUIPPED_RANGED = resolveEquippedWeapon('ranged');
@@ -1327,7 +1338,7 @@ function updatePlayer(dt) {
       player.reloading = false;
     }
   }
-  const wantReload = reloadQueued || (wantShoot && player.mag <= 0);
+  const wantReload = !EQUIPPED_RANGED.unlimitedAmmo && (reloadQueued || (wantShoot && player.mag <= 0));
   reloadQueued = false;
   if (wantReload && !player.reloading && player.mag < EQUIPPED_RANGED.magSize && player.reserve > 0) {
     player.reloading = true;
@@ -1338,7 +1349,7 @@ function updatePlayer(dt) {
   // fireCd throttles both to the weapon's cyclic rate (fireDelay), like a real firearm.
   if (player.fireCd > 0) player.fireCd -= dt * 1000;
   shootQueued = false;
-  if (wantShoot && !player.reloading && player.fireCd <= 0 && player.mag > 0) {
+  if (wantShoot && !player.reloading && player.fireCd <= 0 && (player.mag > 0 || EQUIPPED_RANGED.unlimitedAmmo)) {
     spawnBullet();
     player.fireCd = EQUIPPED_RANGED.fireDelay;
   }
@@ -1814,8 +1825,10 @@ function applyDamageToEnemy(e, dmg, isMelee, killerId) {
 // === PROJECTILES ===
 
 function spawnBullet() {
-  if (player.mag <= 0) return;
-  player.mag--; // one trigger pull consumes one round, regardless of pellet count
+  if (!EQUIPPED_RANGED.unlimitedAmmo) {
+    if (player.mag <= 0) return;
+    player.mag--; // one trigger pull consumes one round, regardless of pellet count
+  }
   SOUNDS.play(EQUIPPED_RANGED.name, 'attack');
   const aimAngle = player.rawAngle;
   const anchor = HAND_ANCHORS[player.facing];
@@ -2091,6 +2104,9 @@ function drawHUD(ctx) {
     ctx.fillStyle = '#f0a840'; ctx.font='13px VT323, monospace';
     ctx.fillText('RELOADING...', 14, 60);
     ctx.globalAlpha = 1;
+  } else if (EQUIPPED_RANGED.unlimitedAmmo) {
+    ctx.fillStyle = '#f0c840'; ctx.font='13px VT323, monospace';
+    ctx.fillText('AMMO  ∞', 14, 60);
   } else {
     ctx.fillStyle = '#f0c840'; ctx.font='13px VT323, monospace';
     ctx.fillText('AMMO  ' + player.mag + ' / ' + player.reserve, 14, 60);
@@ -2171,6 +2187,9 @@ function drawMpHUD(ctx) {
     ctx.fillStyle = '#f0a840'; ctx.font='13px VT323, monospace';
     ctx.fillText('RELOADING...', 14, 60);
     ctx.globalAlpha = 1;
+  } else if (EQUIPPED_RANGED.unlimitedAmmo) {
+    ctx.fillStyle = '#f0c840'; ctx.font='13px VT323, monospace';
+    ctx.fillText('AMMO  ∞', 14, 60);
   } else {
     ctx.fillStyle = '#f0c840'; ctx.font='13px VT323, monospace';
     ctx.fillText('AMMO  ' + player.mag + ' / ' + player.reserve, 14, 60);
