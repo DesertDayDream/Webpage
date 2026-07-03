@@ -145,10 +145,11 @@
       <div class="tool-row">
         <button class="btn small active" id="btn-tool-wall">[ Draw Wall ]</button>
         <button class="btn small" id="btn-tool-road">[ Draw Road ]</button>
+        <button class="btn small" id="btn-tool-palm">[ Place Palm ]</button>
       </div>
       <div class="hint">
-        Drag on empty ground to draw with the active tool above.<br>
-        Click a wall or road to select it, drag to move it.<br>
+        Drag/click on empty ground to draw or place with the active tool above.<br>
+        Click a wall, road, or palm tree to select it, drag to move it.<br>
         Drag the green marker to set the player's start position.<br>
         Delete/Backspace removes the current selection.
       </div>
@@ -182,6 +183,11 @@
         <div class="wall-field-row"><label>X2</label><input type="number" id="rf-x2"></div>
         <div class="wall-field-row"><label>Y2</label><input type="number" id="rf-y2"></div>
         <button class="btn small danger" id="btn-delete-road" style="width:100%;">[ Delete Selected Road ]</button>
+      </div>
+      <div class="wall-fields" id="palm-fields">
+        <div class="wall-field-row"><label>X</label><input type="number" id="pf-x"></div>
+        <div class="wall-field-row"><label>Y</label><input type="number" id="pf-y"></div>
+        <button class="btn small danger" id="btn-delete-palm" style="width:100%;">[ Delete Selected Palm ]</button>
       </div>
     </div>
 
@@ -265,8 +271,9 @@ const BORDER_THICKNESS = 22;
 // cryptographic, just stable across renders and well-distributed across a
 // handful of buckets. Salt convention: 0=building type, 1=war-torn boolean,
 // 2=damage/detail variant, 3=sand speckle (keyed on tile gx,gy), 4=palm
-// spawn/position (keyed on cell cgx,cgy), 10+i=per-unit offset for repeated
-// details (e.g. city HVAC blocks).
+// spawn/position (keyed on cell cgx,cgy), 6=road dirt/pebble speckle (keyed
+// on road start + step index), 7=manual palm tree sway variant (keyed on its
+// x,y), 10+i=per-unit offset for repeated details (e.g. city HVAC blocks).
 function mercsHash(a, b, c, d, salt) {
   let n = (a|0) * 374761393 + (b|0) * 668265263 + (c|0) * 2147483647 + (d|0) * 1274126177 + (salt|0) * 3266489917;
   n = Math.imul(n ^ (n >>> 13), 1274126177);
@@ -431,9 +438,11 @@ function drawBuildingWall(ctx, w, mapW, mapH, vx0, vx1, vy0, vy1) {
 }
 
 // Roads: straight, hand-drawn segments (the road tool below), purely
-// decorative — never added to collision, just painted onto the sand.
+// decorative — never added to collision, painted onto the sand as a beaten
+// dirt track (no asphalt/lane-marking look).
 const ROAD_WIDTH = 40;
-const ROAD_FILL = '#3a3630', ROAD_EDGE = '#26231f', ROAD_DASH = '#c8b878';
+const ROAD_EDGE = '#5c4326', ROAD_FILL = '#8a6a42', ROAD_RUT = '#6e5233';
+const ROAD_LIGHT = '#a4835a', ROAD_DARK = '#6f5535';
 
 function pointSegDist(px, py, x1, y1, x2, y2) {
   const dx = x2-x1, dy = y2-y1;
@@ -445,6 +454,10 @@ function pointSegDist(px, py, x1, y1, x2, y2) {
 }
 
 function drawRoad(ctx, r, selected) {
+  const dx = r.x2-r.x1, dy = r.y2-r.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy/len, ny = dx/len;
+
   ctx.lineCap = 'round';
   ctx.strokeStyle = ROAD_EDGE;
   ctx.lineWidth = ROAD_WIDTH + 4;
@@ -454,17 +467,34 @@ function drawRoad(ctx, r, selected) {
   ctx.lineWidth = ROAD_WIDTH;
   ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
 
-  ctx.save();
-  ctx.strokeStyle = ROAD_DASH;
-  ctx.lineWidth = 2;
-  ctx.setLineDash([14, 10]);
-  ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
-  ctx.restore();
+  ctx.strokeStyle = ROAD_RUT;
+  ctx.lineWidth = 3;
+  ctx.globalAlpha = 0.45;
+  const rutOffset = ROAD_WIDTH * 0.22;
+  [-1, 1].forEach(s => {
+    ctx.beginPath();
+    ctx.moveTo(r.x1 + nx*rutOffset*s, r.y1 + ny*rutOffset*s);
+    ctx.lineTo(r.x2 + nx*rutOffset*s, r.y2 + ny*rutOffset*s);
+    ctx.stroke();
+  });
+  ctx.globalAlpha = 1;
+
+  const steps = Math.max(1, Math.floor(len / 14));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const cx = r.x1 + dx*t, cy = r.y1 + dy*t;
+    const h = mercsHash(Math.round(r.x1), Math.round(r.y1), i, 0, 6);
+    if (h % 3 !== 0) continue;
+    const off = ((h>>>4) % (ROAD_WIDTH-8)) - (ROAD_WIDTH-8)/2;
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = (h & 0x10) ? ROAD_LIGHT : ROAD_DARK;
+    ctx.fillRect(cx + nx*off - 1, cy + ny*off - 1, 2, 2);
+    ctx.globalAlpha = 1;
+  }
 
   if (selected) {
     ctx.strokeStyle = '#3ef83e';
     ctx.lineWidth = 2;
-    ctx.setLineDash([]);
     ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
   }
 }
@@ -473,6 +503,12 @@ const PALM_CELL = 96, PALM_DENSITY_PCT = 35, PALM_PAD = 6;
 
 function rectsOverlapPad(a, b, pad) {
   return a.x < b.x+b.w+pad && a.x+a.w+pad > b.x && a.y < b.y+b.h+pad && a.y+a.h+pad > b.y;
+}
+
+// A tree the palm tool deleted from the auto-generated set — checked by
+// (cgx,cgy) cell identity, independent of any wall/road changes.
+function isPalmRemoved(cgx, cgy, removals) {
+  return removals.some(p => p.cgx === cgx && p.cgy === cgy);
 }
 
 function drawPalmTree(ctx, px, py, h) {
@@ -508,6 +544,8 @@ const MAP_DEFAULTS = {
     {x:538, y:368, w:42, h:42},
   ],
   roads: [],
+  palmRemovals: [], // {cgx,cgy} cells where the auto-generated palm tree was manually deleted
+  palmAdds: [],     // {x,y} manually placed palm trees, in addition to the auto-generated ones
 };
 
 function loadMapConfig() {
@@ -520,6 +558,8 @@ function loadMapConfig() {
       height: Math.max(CH, cfg.height || MAP_DEFAULTS.height),
       walls: Array.isArray(cfg.walls) ? cfg.walls : JSON.parse(JSON.stringify(MAP_DEFAULTS.walls)),
       roads: Array.isArray(cfg.roads) ? cfg.roads : [],
+      palmRemovals: Array.isArray(cfg.palmRemovals) ? cfg.palmRemovals : [],
+      palmAdds: Array.isArray(cfg.palmAdds) ? cfg.palmAdds : [],
       playerStart: cfg.playerStart || { ...MAP_DEFAULTS.playerStart },
     };
   } catch(e) { return JSON.parse(JSON.stringify(MAP_DEFAULTS)); }
@@ -530,9 +570,14 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 // === State ===
 let map = loadMapConfig();
-let selectedType = null; // 'wall' | 'road' | null
-let selectedIdx = -1; // index into map.walls or map.roads, matching selectedType
-let activeTool = 'wall'; // 'wall' | 'road' — governs what dragging on empty ground creates
+let selectedType = null; // 'wall' | 'road' | 'palm' | null
+let selectedIdx = -1; // index into map.walls / map.roads / map.palmAdds, matching selectedType
+let activeTool = 'wall'; // 'wall' | 'road' | 'palm' — governs what clicking/dragging on empty ground creates
+// Rebuilt every render() — the full set of currently-visible palm trees (auto-generated
+// minus removals, plus manual adds), used for click hit-testing. Selection into this list
+// always resolves to a stable map.palmAdds index (see hitPalm below), never a raw index
+// into this array, since its contents can reshuffle across renders.
+let visiblePalms = [];
 
 const canvas = document.getElementById('map-canvas');
 const ctx = canvas.getContext('2d');
@@ -600,11 +645,15 @@ function render() {
   // Roads — decorative only, drawn on the sand before buildings/trees.
   map.roads.forEach((r, i) => drawRoad(ctx, r, selectedType === 'road' && i === selectedIdx));
 
-  // Palm trees — decorative only, checked against every wall (border + interior) and every road.
+  // Palm trees — auto-generated set (minus anything the palm tool deleted)
+  // plus manually placed ones. Rebuilt into visiblePalms every render so the
+  // Place Palm tool's click hit-testing always matches what's on screen.
   const allWalls = [...borderWalls(map.width, map.height), ...map.walls];
+  visiblePalms = [];
   const pGx1 = Math.ceil(map.width/PALM_CELL), pGy1 = Math.ceil(map.height/PALM_CELL);
   for (let cgy = 0; cgy < pGy1; cgy++) {
     for (let cgx = 0; cgx < pGx1; cgx++) {
+      if (isPalmRemoved(cgx, cgy, map.palmRemovals)) continue;
       const h = mercsHash(cgx, cgy, 0, 0, 4);
       if (h % 100 >= PALM_DENSITY_PCT) continue;
       const px = cgx*PALM_CELL + 12 + (h % (PALM_CELL-24));
@@ -615,9 +664,20 @@ function render() {
       let blocked = false;
       for (const w of allWalls) { if (rectsOverlapPad(treeBox, w, PALM_PAD)) { blocked = true; break; } }
       if (!blocked) for (const r of map.roads) { if (pointSegDist(px, py, r.x1, r.y1, r.x2, r.y2) < ROAD_WIDTH/2 + PALM_PAD) { blocked = true; break; } }
-      if (!blocked) drawPalmTree(ctx, px, py, h);
+      if (!blocked) visiblePalms.push({ x: px, y: py, h, source: 'auto', cgx, cgy });
     }
   }
+  map.palmAdds.forEach((p, i) => {
+    visiblePalms.push({ x: p.x, y: p.y, h: mercsHash(Math.round(p.x), Math.round(p.y), 0, 0, 7), source: 'manual', manualIdx: i });
+  });
+  visiblePalms.forEach((p, idx) => {
+    drawPalmTree(ctx, p.x, p.y, p.h);
+    if (selectedType === 'palm' && p.source === 'manual' && p.manualIdx === selectedIdx) {
+      ctx.strokeStyle = '#3ef83e';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.x, p.y - 3, 15, 0, Math.PI*2); ctx.stroke();
+    }
+  });
 
   // Border walls — always present, not editable
   ctx.globalAlpha = 0.6;
@@ -727,14 +787,20 @@ document.getElementById('btn-randomize').onclick = () => {
 };
 
 // === Tool selector ===
-const toolBtns = { wall: document.getElementById('btn-tool-wall'), road: document.getElementById('btn-tool-road') };
+const toolBtns = {
+  wall: document.getElementById('btn-tool-wall'),
+  road: document.getElementById('btn-tool-road'),
+  palm: document.getElementById('btn-tool-palm'),
+};
 function setActiveTool(tool) {
   activeTool = tool;
   toolBtns.wall.classList.toggle('active', tool === 'wall');
   toolBtns.road.classList.toggle('active', tool === 'road');
+  toolBtns.palm.classList.toggle('active', tool === 'palm');
 }
 toolBtns.wall.onclick = () => setActiveTool('wall');
 toolBtns.road.onclick = () => setActiveTool('road');
+toolBtns.palm.onclick = () => setActiveTool('palm');
 
 // === Selection / field panels ===
 const wallFieldsEl = document.getElementById('wall-fields');
@@ -746,9 +812,13 @@ const roadFieldsEl = document.getElementById('road-fields');
 const rfX1 = document.getElementById('rf-x1'), rfY1 = document.getElementById('rf-y1');
 const rfX2 = document.getElementById('rf-x2'), rfY2 = document.getElementById('rf-y2');
 
+const palmFieldsEl = document.getElementById('palm-fields');
+const pfX = document.getElementById('pf-x'), pfY = document.getElementById('pf-y');
+
 function updateFieldsPanel() {
   wallFieldsEl.classList.remove('open');
   roadFieldsEl.classList.remove('open');
+  palmFieldsEl.classList.remove('open');
   if (selectedType === 'wall') {
     const w = map.walls[selectedIdx];
     wallFieldsEl.classList.add('open');
@@ -759,6 +829,10 @@ function updateFieldsPanel() {
     const r = map.roads[selectedIdx];
     roadFieldsEl.classList.add('open');
     rfX1.value = r.x1; rfY1.value = r.y1; rfX2.value = r.x2; rfY2.value = r.y2;
+  } else if (selectedType === 'palm') {
+    const p = map.palmAdds[selectedIdx];
+    palmFieldsEl.classList.add('open');
+    pfX.value = Math.round(p.x); pfY.value = Math.round(p.y);
   }
 }
 
@@ -811,6 +885,24 @@ document.getElementById('btn-delete-road').onclick = () => {
   render();
 };
 
+[pfX, pfY].forEach(input => {
+  input.addEventListener('input', () => {
+    if (selectedType !== 'palm') return;
+    const p = map.palmAdds[selectedIdx];
+    p.x = parseInt(pfX.value) || 0;
+    p.y = parseInt(pfY.value) || 0;
+    render();
+  });
+});
+
+document.getElementById('btn-delete-palm').onclick = () => {
+  if (selectedType !== 'palm') return;
+  map.palmAdds.splice(selectedIdx, 1);
+  selectedType = null; selectedIdx = -1;
+  updateFieldsPanel();
+  render();
+};
+
 // === Canvas interaction ===
 function getMapCoords(e) {
   const rect = canvas.getBoundingClientRect();
@@ -832,6 +924,14 @@ function hitRoad(x, y) {
   for (let i = map.roads.length - 1; i >= 0; i--) {
     const r = map.roads[i];
     if (pointSegDist(x, y, r.x1, r.y1, r.x2, r.y2) <= ROAD_WIDTH/2) return i;
+  }
+  return -1;
+}
+
+// Returns an index into visiblePalms (not map.palmAdds — see its declaration).
+function hitPalm(x, y) {
+  for (let i = visiblePalms.length - 1; i >= 0; i--) {
+    if (Math.hypot(x - visiblePalms[i].x, y - visiblePalms[i].y) <= 15) return i;
   }
   return -1;
 }
@@ -876,12 +976,41 @@ canvas.addEventListener('mousedown', e => {
     return;
   }
 
+  const hitP = hitPalm(x, y);
+  if (hitP !== -1) {
+    const p = visiblePalms[hitP];
+    let manualIdx;
+    if (p.source === 'auto') {
+      // Picking up an auto-generated tree converts it to a manual one at the
+      // same spot (removal + add), so it becomes freely movable/deletable —
+      // visually identical until you actually drag or delete it.
+      map.palmRemovals.push({ cgx: p.cgx, cgy: p.cgy });
+      map.palmAdds.push({ x: p.x, y: p.y });
+      manualIdx = map.palmAdds.length - 1;
+    } else {
+      manualIdx = p.manualIdx;
+    }
+    selectedType = 'palm'; selectedIdx = manualIdx;
+    updateFieldsPanel();
+    dragMode = 'move-palm';
+    const entry = map.palmAdds[manualIdx];
+    dragOffset = { x: x - entry.x, y: y - entry.y };
+    render();
+    return;
+  }
+
   selectedType = null; selectedIdx = -1;
   updateFieldsPanel();
   if (activeTool === 'road') {
     dragMode = 'draw-road';
     drawStart = { x, y };
     roadPreview = { x1:x, y1:y, x2:x, y2:y };
+  } else if (activeTool === 'palm') {
+    map.palmAdds.push({ x, y });
+    selectedType = 'palm'; selectedIdx = map.palmAdds.length - 1;
+    updateFieldsPanel();
+    dragMode = 'move-palm';
+    dragOffset = { x: 0, y: 0 };
   } else {
     dragMode = 'draw-wall';
     drawStart = { x, y };
@@ -918,6 +1047,12 @@ window.addEventListener('mousemove', e => {
     render();
   } else if (dragMode === 'draw-road') {
     roadPreview = { x1: drawStart.x, y1: drawStart.y, x2: x, y2: y };
+    render();
+  } else if (dragMode === 'move-palm') {
+    const p = map.palmAdds[selectedIdx];
+    p.x = clamp(x - dragOffset.x, 0, map.width);
+    p.y = clamp(y - dragOffset.y, 0, map.height);
+    updateFieldsPanel();
     render();
   }
 });
@@ -957,6 +1092,7 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     if (selectedType === 'wall') map.walls.splice(selectedIdx, 1);
     else if (selectedType === 'road') map.roads.splice(selectedIdx, 1);
+    else if (selectedType === 'palm') map.palmAdds.splice(selectedIdx, 1);
     selectedType = null; selectedIdx = -1;
     updateFieldsPanel();
     render();

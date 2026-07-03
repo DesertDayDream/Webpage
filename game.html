@@ -220,6 +220,8 @@ const MAP_DEFAULTS = {
     {x:538, y:368, w:42, h:42},
   ],
   roads: [],
+  palmRemovals: [], // {cgx,cgy} cells where the auto-generated palm tree was manually deleted
+  palmAdds: [],     // {x,y} manually placed palm trees, in addition to the auto-generated ones
 };
 
 function borderWalls(w, h) {
@@ -242,6 +244,8 @@ function loadMapConfig() {
       height: Math.max(CH, cfg.height || MAP_DEFAULTS.height),
       walls: Array.isArray(cfg.walls) ? cfg.walls : MAP_DEFAULTS.walls,
       roads: Array.isArray(cfg.roads) ? cfg.roads : MAP_DEFAULTS.roads,
+      palmRemovals: Array.isArray(cfg.palmRemovals) ? cfg.palmRemovals : MAP_DEFAULTS.palmRemovals,
+      palmAdds: Array.isArray(cfg.palmAdds) ? cfg.palmAdds : MAP_DEFAULTS.palmAdds,
       playerStart: cfg.playerStart || MAP_DEFAULTS.playerStart,
     };
   } catch(e) { return MAP_DEFAULTS; }
@@ -251,6 +255,8 @@ const MAP_CONFIG = loadMapConfig();
 const MAP_W = MAP_CONFIG.width, MAP_H = MAP_CONFIG.height;
 const WALLS = [...borderWalls(MAP_W, MAP_H), ...MAP_CONFIG.walls];
 const ROADS = MAP_CONFIG.roads || [];
+const PALM_REMOVALS = MAP_CONFIG.palmRemovals || [];
+const PALM_ADDS = MAP_CONFIG.palmAdds || [];
 
 const HS_KEY = 'mercs_highscore'; // personal best marker — stays local/per-device, not part of the shared leaderboard
 // Both leaderboards are server-backed (GET/POST /api/leaderboard) so every
@@ -911,8 +917,9 @@ function handleInitialsKey(e) {
 // ~2^31-scale intermediate product, which would otherwise degrade
 // distribution. Salt convention: 0=building type, 1=war-torn boolean,
 // 2=damage/detail variant, 3=sand speckle (keyed on tile gx,gy), 4=palm
-// spawn/position (keyed on cell cgx,cgy), 10+i=per-unit offset for repeated
-// details (e.g. city HVAC blocks).
+// spawn/position (keyed on cell cgx,cgy), 6=road dirt/pebble speckle (keyed
+// on road start + step index), 7=manual palm tree sway variant (keyed on its
+// x,y), 10+i=per-unit offset for repeated details (e.g. city HVAC blocks).
 function mercsHash(a, b, c, d, salt) {
   let n = (a|0) * 374761393 + (b|0) * 668265263 + (c|0) * 2147483647 + (d|0) * 1274126177 + (salt|0) * 3266489917;
   n = Math.imul(n ^ (n >>> 13), 1274126177);
@@ -1088,9 +1095,11 @@ function drawBuildingWall(ctx, w, mapW, mapH, vx0, vx1, vy0, vy1) {
 }
 
 // Roads: straight, hand-drawn segments (map-editor.html's road tool), purely
-// decorative — never added to WALLS/collision, just painted onto the sand.
+// decorative — never added to WALLS/collision, just painted onto the sand as
+// a beaten dirt track (no asphalt/lane-marking look).
 const ROAD_WIDTH = 40;
-const ROAD_FILL = '#3a3630', ROAD_EDGE = '#26231f', ROAD_DASH = '#c8b878';
+const ROAD_EDGE = '#5c4326', ROAD_FILL = '#8a6a42', ROAD_RUT = '#6e5233';
+const ROAD_LIGHT = '#a4835a', ROAD_DARK = '#6f5535';
 
 function pointSegDist(px, py, x1, y1, x2, y2) {
   const dx = x2-x1, dy = y2-y1;
@@ -1102,6 +1111,10 @@ function pointSegDist(px, py, x1, y1, x2, y2) {
 }
 
 function drawRoad(ctx, r) {
+  const dx = r.x2-r.x1, dy = r.y2-r.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy/len, ny = dx/len; // unit perpendicular, for wheel-rut offsets
+
   ctx.lineCap = 'round';
   ctx.strokeStyle = ROAD_EDGE;
   ctx.lineWidth = ROAD_WIDTH + 4;
@@ -1111,18 +1124,44 @@ function drawRoad(ctx, r) {
   ctx.lineWidth = ROAD_WIDTH;
   ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
 
-  ctx.save();
-  ctx.strokeStyle = ROAD_DASH;
-  ctx.lineWidth = 2;
-  ctx.setLineDash([14, 10]);
-  ctx.beginPath(); ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2); ctx.stroke();
-  ctx.restore();
+  // Worn wheel-rut lines, offset either side of center — reads as packed dirt, not pavement.
+  ctx.strokeStyle = ROAD_RUT;
+  ctx.lineWidth = 3;
+  ctx.globalAlpha = 0.45;
+  const rutOffset = ROAD_WIDTH * 0.22;
+  [-1, 1].forEach(s => {
+    ctx.beginPath();
+    ctx.moveTo(r.x1 + nx*rutOffset*s, r.y1 + ny*rutOffset*s);
+    ctx.lineTo(r.x2 + nx*rutOffset*s, r.y2 + ny*rutOffset*s);
+    ctx.stroke();
+  });
+  ctx.globalAlpha = 1;
+
+  // Dirt/pebble speckle, deterministic along the segment (never Math.random()).
+  const steps = Math.max(1, Math.floor(len / 14));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const cx = r.x1 + dx*t, cy = r.y1 + dy*t;
+    const h = mercsHash(Math.round(r.x1), Math.round(r.y1), i, 0, 6);
+    if (h % 3 !== 0) continue;
+    const off = ((h>>>4) % (ROAD_WIDTH-8)) - (ROAD_WIDTH-8)/2;
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = (h & 0x10) ? ROAD_LIGHT : ROAD_DARK;
+    ctx.fillRect(cx + nx*off - 1, cy + ny*off - 1, 2, 2);
+    ctx.globalAlpha = 1;
+  }
 }
 
 const PALM_CELL = 96, PALM_DENSITY_PCT = 35, PALM_PAD = 6;
 
 function rectsOverlapPad(a, b, pad) {
   return a.x < b.x+b.w+pad && a.x+a.w+pad > b.x && a.y < b.y+b.h+pad && a.y+a.h+pad > b.y;
+}
+
+// A tree the map-editor's palm tool deleted from the auto-generated set —
+// checked by (cgx,cgy) cell identity, independent of any wall/road changes.
+function isPalmRemoved(cgx, cgy, removals) {
+  return removals.some(p => p.cgx === cgx && p.cgy === cgy);
 }
 
 function drawPalmTree(ctx, px, py, h) {
@@ -1204,11 +1243,14 @@ function drawMap(ctx) {
     drawRoad(ctx, r);
   }
 
-  // Palm trees — decorative only, never added to collision (WALLS).
+  // Palm trees — decorative only, never added to collision (WALLS). Auto-
+  // generated ones the map-editor's palm tool deleted are skipped via
+  // PALM_REMOVALS; manually placed ones in PALM_ADDS are drawn on top.
   const pGx0 = Math.floor(vx0/PALM_CELL), pGx1 = Math.ceil(vx1/PALM_CELL);
   const pGy0 = Math.floor(vy0/PALM_CELL), pGy1 = Math.ceil(vy1/PALM_CELL);
   for (let cgy = pGy0; cgy < pGy1; cgy++) {
     for (let cgx = pGx0; cgx < pGx1; cgx++) {
+      if (isPalmRemoved(cgx, cgy, PALM_REMOVALS)) continue;
       const h = mercsHash(cgx, cgy, 0, 0, 4);
       if (h % 100 >= PALM_DENSITY_PCT) continue;
       const px = cgx*PALM_CELL + 12 + (h % (PALM_CELL-24));
@@ -1221,6 +1263,10 @@ function drawMap(ctx) {
       if (!blocked) for (const r of ROADS) { if (pointSegDist(px, py, r.x1, r.y1, r.x2, r.y2) < ROAD_WIDTH/2 + PALM_PAD) { blocked = true; break; } }
       if (!blocked) drawPalmTree(ctx, px, py, h);
     }
+  }
+  for (const p of PALM_ADDS) {
+    if (p.x < vx0-40 || p.x > vx1+40 || p.y < vy0-40 || p.y > vy1+40) continue;
+    drawPalmTree(ctx, p.x, p.y, mercsHash(Math.round(p.x), Math.round(p.y), 0, 0, 7));
   }
 
   // Walls / obstacles — building rooftops (or sandbag border) themed to Desert Storm.
