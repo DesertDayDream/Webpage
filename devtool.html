@@ -566,7 +566,7 @@ const CONSTANT_SCHEMAS = {
     { key:'hp',          label:'HP',           min:1,   max:1000, step:5,  unit:'HP'   },
     { key:'dmg',         label:'Contact DMG',  min:1,   max:200,  step:1,  unit:''     },
     { key:'score',       label:'Score',        min:10,  max:5000, step:10, unit:''     },
-    { key:'size',        label:'Size',         min:6,   max:80,   step:2,  unit:'px'   },
+    { key:'size',        label:'Size',         min:6,   max:400,  step:2,  unit:'px'   },
     { key:'unlockAt',    label:'Unlock At',    min:0,   max:120,  step:5,  unit:'s'    },
     { key:'spawnChance', label:'Spawn Chance', min:0,   max:100,  step:5,  unit:'%'    },
   ],
@@ -575,7 +575,7 @@ const CONSTANT_SCHEMAS = {
     { key:'hp',          label:'HP',           min:1,   max:1000, step:5,  unit:'HP'   },
     { key:'dmg',         label:'Contact DMG',  min:1,   max:200,  step:1,  unit:''     },
     { key:'score',       label:'Score',        min:10,  max:5000, step:10, unit:''     },
-    { key:'size',        label:'Size',         min:6,   max:80,   step:2,  unit:'px'   },
+    { key:'size',        label:'Size',         min:6,   max:400,  step:2,  unit:'px'   },
     { key:'unlockAt',    label:'Unlock At',    min:0,   max:120,  step:5,  unit:'s'    },
     { key:'spawnChance', label:'Spawn Chance', min:0,   max:100,  step:5,  unit:'%'    },
   ],
@@ -584,7 +584,7 @@ const CONSTANT_SCHEMAS = {
     { key:'hp',          label:'HP',           min:1,   max:1000, step:5,  unit:'HP'   },
     { key:'dmg',         label:'Contact DMG',  min:1,   max:200,  step:1,  unit:''     },
     { key:'score',       label:'Score',        min:10,  max:5000, step:10, unit:''     },
-    { key:'size',        label:'Size',         min:6,   max:80,   step:2,  unit:'px'   },
+    { key:'size',        label:'Size',         min:6,   max:400,  step:2,  unit:'px'   },
     { key:'unlockAt',    label:'Unlock At',    min:0,   max:120,  step:5,  unit:'s'    },
     { key:'spawnChance', label:'Spawn Chance', min:0,   max:100,  step:5,  unit:'%'    },
   ],
@@ -2652,6 +2652,11 @@ function applyServerConfigToLocalStorage(cfg) {
       localStorage.setItem(ANCHOR_KEY(wn), JSON.stringify(data));
     });
   }
+  if (cfg.hitMasks) {
+    Object.entries(cfg.hitMasks).forEach(([name, url]) => {
+      localStorage.setItem('sprite_' + name + '_hitmask', url);
+    });
+  }
   if (cfg.soundtrack) {
     if (cfg.soundtrack.menu)     localStorage.setItem(soundtrackKey('menu'), JSON.stringify(cfg.soundtrack.menu));
     if (cfg.soundtrack.gameplay) localStorage.setItem(soundtrackKey('gameplay'), JSON.stringify(cfg.soundtrack.gameplay));
@@ -2715,6 +2720,13 @@ function gatherPublishConfig() {
     if (raw) { try { anchors[wn] = JSON.parse(raw); } catch(e) {} }
   });
   if (Object.keys(anchors).length) cfg.anchors = anchors;
+
+  const hitMasks = {};
+  SPRITE_GROUPS.enemies.forEach(name => {
+    const raw = localStorage.getItem('sprite_' + name + '_hitmask');
+    if (raw) hitMasks[name] = raw;
+  });
+  if (Object.keys(hitMasks).length) cfg.hitMasks = hitMasks;
 
   const soundtrack = {};
   const menuTracks = loadSoundtrack('menu');
@@ -2818,7 +2830,7 @@ document.getElementById('btn-edit-sprite').onclick = () => {
 // requiring a manual reload of this tab.
 window.addEventListener('storage', e => {
   if (!e.key) return;
-  const m = e.key.match(/^sprite_(.+?)(_frames|_fps)?$/);
+  const m = e.key.match(/^sprite_(.+?)(_frames|_fps|_hitmask)?$/);
   if (!m) return;
   delete slotState[m[1]];
   updateSlotPreview(m[1]);
