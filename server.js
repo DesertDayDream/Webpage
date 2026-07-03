@@ -52,6 +52,13 @@ const stmtDelSession = db.prepare('DELETE FROM sessions WHERE token = ?');
 const stmtHasSession = db.prepare('SELECT 1 FROM sessions WHERE token = ?');
 const stmtLbTop       = db.prepare('SELECT initials, score, combo, kills, duration FROM leaderboard WHERE board = ? ORDER BY score DESC LIMIT 10');
 const stmtLbInsert    = db.prepare('INSERT INTO leaderboard (board, initials, score, combo, kills, duration, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+// Admin moderation (devtool.html's Leaderboard section) — full list (not just
+// the public top 10) plus per-entry/whole-board deletion, for removing
+// cheated or exploited runs.
+const stmtLbAdminList  = db.prepare('SELECT id, initials, score, combo, kills, duration, created_at FROM leaderboard WHERE board = ? ORDER BY score DESC LIMIT 500');
+const stmtLbDelete     = db.prepare('DELETE FROM leaderboard WHERE id = ?');
+const stmtLbClearBoard = db.prepare('DELETE FROM leaderboard WHERE board = ?');
+const stmtLbClearAll   = db.prepare('DELETE FROM leaderboard');
 
 function getToken(req) {
   var m = (req.headers.cookie || '').match(/(?:^|;\s*)trm_session=([^;]+)/);
@@ -213,6 +220,34 @@ app.post('/api/leaderboard', function(req, res) {
     recentMpResults.delete(body.matchId); // one-time use — no resubmitting the same match
   }
   stmtLbInsert.run(board, initials, score, combo, kills, duration, Date.now());
+  res.json({ ok: true });
+});
+
+// GET /api/leaderboard/admin?board=sp|mp — admin-only. Full list (up to 500,
+// not just the public top 10) including each row's id/created_at, so the
+// devtool's Leaderboard section can list and manage every entry, not just
+// what's publicly displayed.
+app.get('/api/leaderboard/admin', requireAuth, function(req, res) {
+  var board = req.query.board === 'mp' ? 'mp' : 'sp';
+  res.json({ entries: stmtLbAdminList.all(board) });
+});
+
+// POST /api/leaderboard/delete ← { id } — admin-only, permanently removes a
+// single entry (cheating/exploit cleanup).
+app.post('/api/leaderboard/delete', requireAuth, function(req, res) {
+  var id = parseInt((req.body || {}).id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid id' });
+  stmtLbDelete.run(id);
+  res.json({ ok: true });
+});
+
+// POST /api/leaderboard/clear ← { board: 'sp'|'mp'|'all' } — admin-only,
+// permanently wipes an entire board (or both) at once.
+app.post('/api/leaderboard/clear', requireAuth, function(req, res) {
+  var board = (req.body || {}).board;
+  if (board === 'all') stmtLbClearAll.run();
+  else if (board === 'sp' || board === 'mp') stmtLbClearBoard.run(board);
+  else return res.status(400).json({ error: 'invalid board' });
   res.json({ ok: true });
 });
 

@@ -69,6 +69,20 @@
   .slot-row-main { display:flex; align-items:stretch; gap:0; }
   .slot-sound-sliders { border-top:1px solid var(--border); padding:8px 12px; }
 
+  /* ── LEADERBOARD ADMIN ── */
+  .lb-tabs { display:flex; gap:6px; margin-bottom:10px; }
+  .lb-tabs .btn.active { border-color:var(--green); color:var(--green); background:var(--green-dim); }
+  .lb-row {
+    display:flex; align-items:center; gap:10px; padding:6px 10px;
+    background:var(--surface); border:1px solid var(--border); margin-bottom:4px; font-size:12px;
+  }
+  .lb-rank     { width:26px; color:var(--text-dim); flex-shrink:0; }
+  .lb-initials { width:36px; color:var(--text); font-weight:bold; flex-shrink:0; }
+  .lb-score    { width:80px; text-align:right; color:var(--amber); flex-shrink:0; }
+  .lb-stats    { flex:1; color:var(--text-dim); font-size:11px; }
+  .lb-date     { width:120px; color:var(--text-dim); font-size:10px; flex-shrink:0; }
+  .lb-empty    { color:var(--text-dim); font-size:12px; padding:10px 0; }
+
   .slot-preview {
     width:72px; height:72px; flex-shrink:0;
     background:#0d0b12; border-right:1px solid var(--border);
@@ -321,6 +335,16 @@
 
     <div class="section-title" style="margin-top:20px;">&gt; <span>PICKUPS</span> // drops &amp; collectibles</div>
     <div id="group-pickups"></div>
+
+    <div class="section-title" style="margin-top:20px; display:flex; align-items:center; justify-content:space-between;">
+      <span>&gt; <span>LEADERBOARD</span> // moderation — remove entries or wipe a board, e.g. for cheating/exploits</span>
+      <button class="btn danger" id="btn-lb-clear" style="font-size:11px; padding:3px 10px;">[ Clear This Board ]</button>
+    </div>
+    <div class="lb-tabs">
+      <button class="btn active" id="btn-lb-tab-sp">[ Singleplayer ]</button>
+      <button class="btn" id="btn-lb-tab-mp">[ Multiplayer ]</button>
+    </div>
+    <div id="leaderboard-admin-list"></div>
 
   </div>
 
@@ -2800,6 +2824,101 @@ window.addEventListener('storage', e => {
   updateSlotPreview(m[1]);
 });
 
+// === LEADERBOARD ADMIN (moderation — view/remove entries, wipe a board) ===
+// Mirrors game.html's formatDuration — this page is standalone (no shared JS
+// module system in this project), so it's duplicated.
+function formatDuration(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+}
+
+let lbAdminBoard = 'sp';
+
+async function loadLeaderboardAdmin(board) {
+  try {
+    const r = await fetch(API_BASE + '/api/leaderboard/admin?board=' + board, { credentials: 'include' });
+    const d = await r.json();
+    return (d && d.entries) || [];
+  } catch(e) { return []; }
+}
+
+async function renderLeaderboardAdmin() {
+  const container = document.getElementById('leaderboard-admin-list');
+  container.innerHTML = '<div class="lb-empty">Loading...</div>';
+  const entries = await loadLeaderboardAdmin(lbAdminBoard);
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="lb-empty">No entries on this board.</div>';
+    return;
+  }
+  container.innerHTML = '';
+  entries.forEach((entry, i) => {
+    const row = document.createElement('div');
+    row.className = 'lb-row';
+
+    const rank = document.createElement('span');
+    rank.className = 'lb-rank'; rank.textContent = (i+1) + '.';
+
+    const initials = document.createElement('span');
+    initials.className = 'lb-initials'; initials.textContent = entry.initials;
+
+    const score = document.createElement('span');
+    score.className = 'lb-score'; score.textContent = entry.score;
+
+    const stats = document.createElement('span');
+    stats.className = 'lb-stats';
+    stats.textContent = 'COMBO x' + (entry.combo||0) + '   KILLS ' + (entry.kills||0) + '   TIME ' + formatDuration(entry.duration||0);
+
+    const date = document.createElement('span');
+    date.className = 'lb-date';
+    date.textContent = entry.created_at ? new Date(entry.created_at).toLocaleString() : '';
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn danger'; delBtn.style.fontSize = '11px'; delBtn.style.padding = '3px 10px';
+    delBtn.textContent = '[ Delete ]';
+    delBtn.onclick = () => deleteLeaderboardEntry(entry.id);
+
+    row.appendChild(rank); row.appendChild(initials); row.appendChild(score);
+    row.appendChild(stats); row.appendChild(date); row.appendChild(delBtn);
+    container.appendChild(row);
+  });
+}
+
+async function deleteLeaderboardEntry(id) {
+  if (!confirm('Permanently delete this leaderboard entry? This cannot be undone.')) return;
+  try {
+    await fetch(API_BASE + '/api/leaderboard/delete', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    setStatus('Deleted leaderboard entry #' + id);
+  } catch(e) { setStatus('Delete failed: ' + e.message); }
+  renderLeaderboardAdmin();
+}
+
+function setLbAdminBoard(board) {
+  lbAdminBoard = board;
+  document.getElementById('btn-lb-tab-sp').classList.toggle('active', board === 'sp');
+  document.getElementById('btn-lb-tab-mp').classList.toggle('active', board === 'mp');
+  renderLeaderboardAdmin();
+}
+document.getElementById('btn-lb-tab-sp').onclick = () => setLbAdminBoard('sp');
+document.getElementById('btn-lb-tab-mp').onclick = () => setLbAdminBoard('mp');
+
+document.getElementById('btn-lb-clear').onclick = async () => {
+  const boardLabel = lbAdminBoard === 'sp' ? 'Singleplayer' : 'Multiplayer';
+  if (!confirm('Permanently delete ALL ' + boardLabel + ' leaderboard entries? This cannot be undone.')) return;
+  try {
+    await fetch(API_BASE + '/api/leaderboard/clear', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ board: lbAdminBoard }),
+    });
+    setStatus('Cleared the ' + boardLabel + ' leaderboard');
+  } catch(e) { setStatus('Clear failed: ' + e.message); }
+  renderLeaderboardAdmin();
+};
+
 // === INIT ===
 
 function rebuildUI() {
@@ -2856,6 +2975,7 @@ function initDevtool() {
   });
 
   rebuildUI();
+  renderLeaderboardAdmin();
 }
 
 bootstrapDevtool();
