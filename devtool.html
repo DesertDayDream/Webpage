@@ -910,6 +910,34 @@ function toggleUnlimitedAmmo(name, on) {
   saveUnlimitedAmmo(data);
 }
 
+// === WEAPON DROP WEIGHT (per-weapon relative chance among the loot pool) ===
+// Not an independent percentage — when a weapon pickup rolls, the chosen
+// weapon is picked from the loot pool with probability proportional to its
+// own weight vs the sum of every pooled weapon's weight. Every weapon
+// defaults to the same weight, which reduces to today's uniform-random pick
+// until someone actually moves a slider.
+const WEAPON_DROP_WEIGHT_DEFAULT = 50;
+const WEAPON_DROP_WEIGHTS_KEY = 'mercs_weapon_drop_weights';
+
+function loadWeaponDropWeights() {
+  try { return JSON.parse(localStorage.getItem(WEAPON_DROP_WEIGHTS_KEY) || '{}'); } catch(e) { return {}; }
+}
+
+function saveWeaponDropWeights(data) {
+  localStorage.setItem(WEAPON_DROP_WEIGHTS_KEY, JSON.stringify(data));
+}
+
+function getWeaponDropWeight(name) {
+  const w = loadWeaponDropWeights()[name];
+  return typeof w === 'number' ? w : WEAPON_DROP_WEIGHT_DEFAULT;
+}
+
+function setWeaponDropWeight(name, weight) {
+  const data = loadWeaponDropWeights();
+  data[name] = weight;
+  saveWeaponDropWeights(data);
+}
+
 function loadAnchorData(wn) {
   try {
     const raw = localStorage.getItem(ANCHOR_KEY(wn));
@@ -1225,6 +1253,7 @@ function buildSlotRow(name, container) {
 
   // Equip / loot pool toggles — only ranged/melee weapons can be worn or dropped
   const cat = weaponCategory(name);
+  let dropWeightWrap = null;
   if (cat) {
     const equipToggle = makeToggle('EQUIP', getEquipped(cat) === name, checked => {
       if (checked) {
@@ -1239,10 +1268,23 @@ function buildSlotRow(name, container) {
 
     const lootToggle = makeToggle('LOOT POOL', isInLootPool(name), checked => {
       toggleLootPool(name, checked);
+      dropWeightWrap.style.display = checked ? '' : 'none';
       setStatus((checked ? 'Added ' : 'Removed ') + name + (checked ? ' to' : ' from') + ' the weapon drop loot pool');
     }, 'toggle-loot');
     lootToggle.label.title = 'Let this weapon drop from enemies as a pickup';
     actions.appendChild(lootToggle.label);
+
+    // Drop chance — relative to every other weapon currently in the loot pool, not an
+    // independent percentage. Only meaningful (and only shown) once LOOT POOL is on.
+    dropWeightWrap = document.createElement('div');
+    dropWeightWrap.className = 'slot-sound-sliders';
+    dropWeightWrap.style.display = isInLootPool(name) ? '' : 'none';
+    dropWeightWrap.title = 'How likely this weapon is to be the one that drops, relative to every other weapon in the loot pool';
+    renderMixerRow(dropWeightWrap, 'DROP CHANCE', {
+      min: 1, max: 100, initialValue: getWeaponDropWeight(name),
+      format: v => v,
+      onChange: v => setWeaponDropWeight(name, v),
+    });
   }
 
   // Unlimited ammo toggle — ranged weapons only; melee has no ammo/reload concept
@@ -1267,6 +1309,7 @@ function buildSlotRow(name, container) {
 
   mainRow.appendChild(previewWrap); mainRow.appendChild(info); mainRow.appendChild(actions);
   div.appendChild(mainRow);
+  if (dropWeightWrap) div.appendChild(dropWeightWrap);
   if (soundKinds) div.appendChild(buildSoundSliders(name, soundKinds));
   container.appendChild(div);
 
@@ -2563,6 +2606,7 @@ function applyServerConfigToLocalStorage(cfg) {
   if (cfg.activeEnemies)  localStorage.setItem('mercs_active_enemies', JSON.stringify(cfg.activeEnemies));
   if (cfg.lootPool)        localStorage.setItem('mercs_loot_pool', JSON.stringify(cfg.lootPool));
   if (cfg.unlimitedAmmo)  localStorage.setItem('mercs_unlimited_ammo', JSON.stringify(cfg.unlimitedAmmo));
+  if (cfg.weaponDropWeights) localStorage.setItem('mercs_weapon_drop_weights', JSON.stringify(cfg.weaponDropWeights));
   if (cfg.equippedRanged) localStorage.setItem('mercs_equipped_ranged', cfg.equippedRanged);
   if (cfg.equippedMelee)  localStorage.setItem('mercs_equipped_melee', cfg.equippedMelee);
   if (cfg.customWeapons)  localStorage.setItem('mercs_custom_weapons', JSON.stringify(cfg.customWeapons));
@@ -2616,6 +2660,8 @@ function gatherPublishConfig() {
   if (lootPool) cfg.lootPool = JSON.parse(lootPool);
   const unlimitedAmmo = localStorage.getItem('mercs_unlimited_ammo');
   if (unlimitedAmmo) cfg.unlimitedAmmo = JSON.parse(unlimitedAmmo);
+  const weaponDropWeights = localStorage.getItem('mercs_weapon_drop_weights');
+  if (weaponDropWeights) cfg.weaponDropWeights = JSON.parse(weaponDropWeights);
   const equippedRanged = localStorage.getItem('mercs_equipped_ranged');
   if (equippedRanged) cfg.equippedRanged = equippedRanged;
   const equippedMelee = localStorage.getItem('mercs_equipped_melee');

@@ -59,6 +59,7 @@ function applyServerConfigToLocalStorage(cfg) {
   if (cfg.activeEnemies)  localStorage.setItem('mercs_active_enemies', JSON.stringify(cfg.activeEnemies));
   if (cfg.lootPool)        localStorage.setItem('mercs_loot_pool', JSON.stringify(cfg.lootPool));
   if (cfg.unlimitedAmmo)  localStorage.setItem('mercs_unlimited_ammo', JSON.stringify(cfg.unlimitedAmmo));
+  if (cfg.weaponDropWeights) localStorage.setItem('mercs_weapon_drop_weights', JSON.stringify(cfg.weaponDropWeights));
   if (cfg.equippedRanged) localStorage.setItem('mercs_equipped_ranged', cfg.equippedRanged);
   if (cfg.equippedMelee)  localStorage.setItem('mercs_equipped_melee', cfg.equippedMelee);
   if (cfg.customWeapons)  localStorage.setItem('mercs_custom_weapons', JSON.stringify(cfg.customWeapons));
@@ -176,6 +177,32 @@ function lootPoolEntries() {
   (pool.ranged || []).forEach(name => entries.push({ name, category:'ranged' }));
   (pool.melee  || []).forEach(name => entries.push({ name, category:'melee'  }));
   return entries;
+}
+
+// Per-weapon drop weight — set via the "DROP CHANCE" slider in devtool.html
+// (mercs_weapon_drop_weights), shown once a weapon is in the loot pool. Not an
+// independent percentage: when a weapon pickup rolls, the specific weapon is
+// picked from the pool with probability proportional to its own weight versus
+// the sum of every pooled weapon's weight. Weapons without a saved weight (or
+// with the loot pool otherwise untouched) default equally, which reduces to
+// today's plain uniform-random pick.
+const WEAPON_DROP_WEIGHT_DEFAULT = 50;
+function loadWeaponDropWeights() {
+  try { return JSON.parse(localStorage.getItem('mercs_weapon_drop_weights') || '{}'); } catch(e) { return {}; }
+}
+function getWeaponDropWeight(name) {
+  const w = loadWeaponDropWeights()[name];
+  return typeof w === 'number' ? w : WEAPON_DROP_WEIGHT_DEFAULT;
+}
+function pickWeightedWeapon(pool) {
+  const weights = pool.map(entry => Math.max(0.01, getWeaponDropWeight(entry.name)));
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return pool[i];
+  }
+  return pool[pool.length - 1]; // floating-point rounding fallback
 }
 
 // Active enemies — set via the "ACTIVE" toggle in devtool.html (mercs_active_enemies).
@@ -1787,7 +1814,7 @@ function killEnemy(e, isMelee, killerId) {
   } else if (roll < ph.dropChance + pa.dropChance + pw.dropChance) {
     const pool = lootPoolEntries();
     if (pool.length > 0) {
-      const drop = pool[Math.floor(Math.random() * pool.length)];
+      const drop = pickWeightedWeapon(pool);
       pickups.push({ id: nextPickupId++, kind:'weapon', x: e.x, y: e.y, timer:0, weaponName: drop.name, category: drop.category });
       SOUNDS.play('PICKUP_WEAPON', 'spawn');
     }
