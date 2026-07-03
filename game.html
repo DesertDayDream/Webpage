@@ -828,10 +828,14 @@ let spawnTimer= 0;
 let spawnRate = 3.0;
 let highScore = parseInt(localStorage.getItem(HS_KEY) || '0');
 let peakCombo = 0;
+let kills     = 0;
 
 // === LEADERBOARD ===
 
 let pendingScore    = 0;
+let pendingCombo    = 0;
+let pendingKills    = 0;
+let pendingDuration = 0;
 let initials        = ['A','A','A'];
 let initialsCursor  = 0;
 let leaderboardEntries = [];
@@ -859,13 +863,16 @@ async function qualifiesForLeaderboard(s, board = LB_BOARD_SP) {
   return lb.length < LB_MAX || s > lb[lb.length - 1].score;
 }
 
-async function addLeaderboardEntry(name, s, board = LB_BOARD_SP, matchId = null) {
+// combo/kills/duration are only actually trusted server-side for board 'mp'
+// (pulled from the match record the server itself computed) — for 'sp' they're
+// stored as-sent, same bounds-checked-only trust level the score already has.
+async function addLeaderboardEntry(name, s, board = LB_BOARD_SP, matchId = null, combo = 0, kills = 0, duration = 0) {
   let ok = true;
   try {
     const r = await fetch(API_BASE + '/api/leaderboard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ board, initials: name, score: s, matchId }),
+      body: JSON.stringify({ board, initials: name, score: s, matchId, combo, kills, duration }),
     });
     ok = r.ok;
   } catch(e) { ok = false; }
@@ -908,7 +915,7 @@ function handleInitialsKey(e) {
       STATE = 'mpLeaderboard';
       mpLeaderboardEntries = [];
       mpLeaderboardLoading = true;
-      addLeaderboardEntry(name, pendingScore, LB_BOARD_MP, mpMatchId).then(({ ok, entries }) => {
+      addLeaderboardEntry(name, pendingScore, LB_BOARD_MP, mpMatchId, pendingCombo, pendingKills, pendingDuration).then(({ ok, entries }) => {
         mpLeaderboardEntries = entries;
         mpLeaderboardLoading = false;
         if (ok) {
@@ -926,7 +933,7 @@ function handleInitialsKey(e) {
       STATE = 'leaderboard';
       leaderboardEntries = [];
       leaderboardLoading = true;
-      addLeaderboardEntry(name, pendingScore, LB_BOARD_SP).then(({ entries }) => {
+      addLeaderboardEntry(name, pendingScore, LB_BOARD_SP, null, pendingCombo, pendingKills, pendingDuration).then(({ entries }) => {
         leaderboardEntries = entries;
         leaderboardLoading = false;
         justSavedIndex = entries.findIndex(en => en.initials === name && en.score === pendingScore);
@@ -1779,12 +1786,15 @@ function killEnemy(e, isMelee, killerId) {
   let mult;
   if (mp) {
     // Combo is a shared team streak — any player's kill extends it, host is
-    // authoritative. Score is still tracked per player for the scoreboard.
-    const ps = playerScores[killerId] || (playerScores[killerId] = { name: '', score: 0 });
+    // authoritative. Score (and now kills) are still tracked per player for
+    // the scoreboard; peak combo is match-wide, for the leaderboard.
+    const ps = playerScores[killerId] || (playerScores[killerId] = { name: '', score: 0, kills: 0 });
     mpCombo++;
+    if (mpCombo > mpPeakCombo) mpPeakCombo = mpCombo;
     mpComboTimer = COMBO_TIMEOUT;
     mult = mpCombo;
     ps.score += e.def.score * mult;
+    ps.kills = (ps.kills || 0) + 1;
 
     if (milestones[mpCombo]) {
       comboMilestone = milestones[mpCombo];
@@ -1796,6 +1806,7 @@ function killEnemy(e, isMelee, killerId) {
     comboTimer = COMBO_TIMEOUT;
     mult = combo;
     score += e.def.score * mult;
+    kills++;
 
     if (milestones[combo]) {
       comboMilestone = milestones[combo];
@@ -2364,6 +2375,9 @@ function drawMpEndedScreen(ctx) {
       qualifiesForLeaderboard(teamScore, LB_BOARD_MP).then(qualifies => {
         if (qualifies) {
           pendingScore = teamScore;
+          pendingCombo = mpFinalCombo;
+          pendingKills = entries.reduce((sum, [, ps]) => sum + (ps.kills || 0), 0);
+          pendingDuration = mpFinalDuration;
           initials = ['A','A','A']; initialsCursor = 0;
           STATE = 'mpEnterInitials';
         } else {
@@ -2503,7 +2517,10 @@ function loadMyCharacter() {
 // to everyone alongside scores.
 let mpCombo = 0;
 let mpComboTimer = 0;
+let mpPeakCombo = 0; // highest mpCombo reached this match — for the leaderboard, not just the live counter
 let mpFinalScores = {};
+let mpFinalCombo = 0;    // set from the 'ended' message — match-wide, not per-player
+let mpFinalDuration = 0; // set from the 'ended' message — match-wide, not per-player
 // One-time token the server hands back with the real match result it
 // recorded, so a later leaderboard submission can be checked against an
 // actual match instead of trusting whatever number the client sends.
@@ -2522,7 +2539,13 @@ Net.on('lobby', msg => {
 });
 Net.on('error', msg => { mpErrorMsg = msg.message || 'Error'; mpErrorUntil = Date.now() + 3000; });
 Net.on('started', msg => { startMultiplayerMatch(msg); });
-Net.on('ended', msg => { STATE = 'mpEnded'; mpFinalScores = msg.scores || {}; mpMatchId = msg.matchId || null; });
+Net.on('ended', msg => {
+  STATE = 'mpEnded';
+  mpFinalScores = msg.scores || {};
+  mpMatchId = msg.matchId || null;
+  mpFinalCombo = msg.combo || 0;
+  mpFinalDuration = msg.duration || 0;
+});
 
 Net.on('state', msg => {
   if (msg.kind === 'player') {
@@ -2655,10 +2678,10 @@ function startMultiplayerMatch(msg) {
 
   remotePlayers = new Map();
   playerScores = {};
-  mpCombo = 0; mpComboTimer = 0;
+  mpCombo = 0; mpComboTimer = 0; mpPeakCombo = 0;
   comboMilestone = ''; comboMilestoneTimer = 0;
   msg.players.forEach(p => {
-    playerScores[p.id] = { name: p.name, score: 0 };
+    playerScores[p.id] = { name: p.name, score: 0, kills: 0 };
     if (p.id !== Net.playerId) {
       remotePlayers.set(p.id, { name: p.name, x: undefined, y: undefined, facing: 'S', hp: 100, maxHp: 100, weaponName: 'WEAPON_PISTOL', character: null });
     }
@@ -2707,7 +2730,7 @@ function respawnPlayer() {
 // the 'ended' broadcast) that the match is over.
 function endMultiplayerMatch() {
   if (!isHost) return;
-  Net.send('end', { scores: playerScores });
+  Net.send('end', { scores: playerScores, peakCombo: mpPeakCombo, elapsed: Math.floor(elapsed) });
 }
 
 function updateRemotePlayers(dt) {
@@ -3170,6 +3193,33 @@ function drawInitialsScreen(ctx) {
   ctx.textAlign = 'left';
 }
 
+// m:ss, for a leaderboard entry's total time played.
+function formatDuration(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+}
+
+// Shared by both leaderboard screens — the per-entry rank/initials/score line
+// plus a smaller subtext line underneath for combo/kills/time. `entry.combo`,
+// `.kills`, `.duration` come straight from the server's leaderboard row.
+function drawLeaderboardRow(ctx, entry, i, y, colRank, colInitials, colScore) {
+  const isNew = i === justSavedIndex;
+  ctx.font = (isNew ? 'bold ' : '') + '20px VT323, monospace';
+  ctx.fillStyle = isNew ? '#3ef83e' : (i === 0 ? '#f0e040' : '#c8c6e0');
+  ctx.textAlign = 'left';
+  ctx.fillText((i+1) + '.', colRank, y);
+  ctx.fillText(entry.initials, colInitials, y);
+  ctx.textAlign = 'right';
+  ctx.fillText(entry.score.toString().padStart(8,'0'), colScore, y);
+
+  ctx.font = '12px VT323, monospace';
+  ctx.fillStyle = '#5a5870';
+  ctx.fillText(
+    'COMBO x' + (entry.combo||0) + '   KILLS ' + (entry.kills||0) + '   TIME ' + formatDuration(entry.duration||0),
+    colScore, y + 15
+  );
+}
+
 function drawLeaderboardScreen(ctx) {
   ctx.fillStyle = 'rgba(0,0,0,0.92)';
   ctx.fillRect(0,0,CW,CH);
@@ -3181,7 +3231,7 @@ function drawLeaderboardScreen(ctx) {
 
   const lb = leaderboardEntries;
   const colRank = CW/2 - 170, colInitials = CW/2 - 100, colScore = CW/2 + 170;
-  const startY = 130, rowH = 34;
+  const startY = 112, rowH = 40;
 
   if (lb.length === 0) {
     ctx.fillStyle = '#5a5870';
@@ -3189,17 +3239,7 @@ function drawLeaderboardScreen(ctx) {
     ctx.fillText(leaderboardLoading ? 'LOADING...' : 'NO SCORES YET', CW/2, startY + 20);
   }
 
-  lb.forEach((entry, i) => {
-    const y = startY + i * rowH;
-    const isNew = i === justSavedIndex;
-    ctx.font = (isNew ? 'bold ' : '') + '22px VT323, monospace';
-    ctx.fillStyle = isNew ? '#3ef83e' : (i === 0 ? '#f0e040' : '#c8c6e0');
-    ctx.textAlign = 'left';
-    ctx.fillText((i+1) + '.', colRank, y);
-    ctx.fillText(entry.initials, colInitials, y);
-    ctx.textAlign = 'right';
-    ctx.fillText(entry.score.toString().padStart(8,'0'), colScore, y);
-  });
+  lb.forEach((entry, i) => drawLeaderboardRow(ctx, entry, i, startY + i * rowH, colRank, colInitials, colScore));
   ctx.textAlign = 'center';
 
   const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400);
@@ -3213,7 +3253,8 @@ function drawLeaderboardScreen(ctx) {
 
 // Multiplayer's own leaderboard — separate list from single-player's (team
 // totals aren't comparable to solo scores), reached only via a host's
-// "SAVE TEAM RUN" submission on the MATCH OVER screen.
+// "SAVE TEAM RUN" submission on the MATCH OVER screen. Combo/kills/time here
+// are match-wide (team) totals, not any one player's individual stats.
 function drawMpLeaderboardScreen(ctx) {
   ctx.fillStyle = 'rgba(0,0,0,0.92)';
   ctx.fillRect(0,0,CW,CH);
@@ -3225,7 +3266,7 @@ function drawMpLeaderboardScreen(ctx) {
 
   const lb = mpLeaderboardEntries;
   const colRank = CW/2 - 170, colInitials = CW/2 - 100, colScore = CW/2 + 170;
-  const startY = 130, rowH = 34;
+  const startY = 112, rowH = 40;
 
   if (lb.length === 0) {
     ctx.fillStyle = '#5a5870';
@@ -3233,20 +3274,10 @@ function drawMpLeaderboardScreen(ctx) {
     ctx.fillText(mpLeaderboardLoading ? 'LOADING...' : 'NO TEAM RUNS YET', CW/2, startY + 20);
   }
 
-  lb.forEach((entry, i) => {
-    const y = startY + i * rowH;
-    const isNew = i === justSavedIndex;
-    ctx.font = (isNew ? 'bold ' : '') + '22px VT323, monospace';
-    ctx.fillStyle = isNew ? '#3ef83e' : (i === 0 ? '#f0e040' : '#c8c6e0');
-    ctx.textAlign = 'left';
-    ctx.fillText((i+1) + '.', colRank, y);
-    ctx.fillText(entry.initials, colInitials, y);
-    ctx.textAlign = 'right';
-    ctx.fillText(entry.score.toString().padStart(8,'0'), colScore, y);
-  });
+  lb.forEach((entry, i) => drawLeaderboardRow(ctx, entry, i, startY + i * rowH, colRank, colInitials, colScore));
   ctx.textAlign = 'center';
 
-  const bw = 220, bh = 44, bx = CW/2 - bw/2, by = startY + Math.max(lb.length, 1) * rowH + 30;
+  const bw = 220, bh = 44, bx = CW/2 - bw/2, by = startY + Math.max(lb.length, 1) * rowH + 20;
   uiButton(ctx, bx, by, bw, bh, '[ BACK TO LOBBIES ]', () => { STATE = 'mpBrowse'; Net.send('list'); });
   ctx.textAlign = 'left';
 }
@@ -3301,6 +3332,9 @@ async function endGame() {
     localStorage.setItem(HS_KEY, highScore);
   }
   pendingScore = score;
+  pendingCombo = peakCombo;
+  pendingKills = kills;
+  pendingDuration = Math.floor(elapsed);
   STATE = 'dead'; // safe default while the leaderboard check is in flight
   const qualifies = await qualifiesForLeaderboard(score, LB_BOARD_SP);
   // Only upgrade to the initials prompt if still on the dead screen — the
@@ -3341,6 +3375,7 @@ function startGame() {
   resetPlayerForMatch();
   score = 0; combo = 0; comboTimer = 0; comboMilestone = ''; comboMilestoneTimer = 0;
   peakCombo = 0;
+  kills = 0;
   justSavedIndex = -1;
 }
 

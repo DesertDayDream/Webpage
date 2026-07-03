@@ -38,14 +38,20 @@ db.exec('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY)');
 // different players just INSERT — no read-modify-write race between two
 // people saving a score at the same time.
 db.exec('CREATE TABLE IF NOT EXISTS leaderboard (id INTEGER PRIMARY KEY AUTOINCREMENT, board TEXT NOT NULL, initials TEXT NOT NULL, score INTEGER NOT NULL, created_at INTEGER NOT NULL)');
+// Added after the table above was already live in production — wrapped in
+// try/catch (SQLite has no "ADD COLUMN IF NOT EXISTS") so this stays a no-op
+// once each column actually exists.
+try { db.exec('ALTER TABLE leaderboard ADD COLUMN combo INTEGER NOT NULL DEFAULT 0'); } catch(e) {}
+try { db.exec('ALTER TABLE leaderboard ADD COLUMN kills INTEGER NOT NULL DEFAULT 0'); } catch(e) {}
+try { db.exec('ALTER TABLE leaderboard ADD COLUMN duration INTEGER NOT NULL DEFAULT 0'); } catch(e) {}
 
 const stmtGet        = db.prepare('SELECT value FROM kv WHERE key = ?');
 const stmtUpsert     = db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)');
 const stmtAddSession = db.prepare('INSERT OR IGNORE INTO sessions (token) VALUES (?)');
 const stmtDelSession = db.prepare('DELETE FROM sessions WHERE token = ?');
 const stmtHasSession = db.prepare('SELECT 1 FROM sessions WHERE token = ?');
-const stmtLbTop       = db.prepare('SELECT initials, score FROM leaderboard WHERE board = ? ORDER BY score DESC LIMIT 10');
-const stmtLbInsert    = db.prepare('INSERT INTO leaderboard (board, initials, score, created_at) VALUES (?, ?, ?, ?)');
+const stmtLbTop       = db.prepare('SELECT initials, score, combo, kills, duration FROM leaderboard WHERE board = ? ORDER BY score DESC LIMIT 10');
+const stmtLbInsert    = db.prepare('INSERT INTO leaderboard (board, initials, score, combo, kills, duration, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
 
 function getToken(req) {
   var m = (req.headers.cookie || '').match(/(?:^|;\s*)trm_session=([^;]+)/);
@@ -171,21 +177,21 @@ app.post('/api/mercs-config', requireAuth, function(req, res) {
   res.json({ ok: true });
 });
 
-// GET /api/leaderboard?board=sp|mp → { entries: [{initials,score}, ...] }
+// GET /api/leaderboard?board=sp|mp → { entries: [{initials,score,combo,kills,duration}, ...] }
 // (top 10, public — a shared leaderboard everyone can see).
 app.get('/api/leaderboard', function(req, res) {
   var board = req.query.board === 'mp' ? 'mp' : 'sp';
   res.json({ entries: stmtLbTop.all(board) });
 });
 
-// POST /api/leaderboard ← { board, initials, score, matchId? } — public, no
-// login: any player can submit their own run. There's no player-account
-// system, so this still trusts the client's initials — but for board 'mp' the
-// score itself is checked against a real match result the server recorded
-// when that match ended (see the 'end' WebSocket handler below), instead of
-// trusting whatever number the client sends. Single-player has no such
-// ground truth (it's simulated entirely client-side), so it stays
-// bounds-checked only, same as before.
+// POST /api/leaderboard ← { board, initials, score, combo?, kills?, duration?,
+// matchId? } — public, no login: any player can submit their own run. There's
+// no player-account system, so this still trusts the client's initials — but
+// for board 'mp' the score AND the combo/kills/duration stats are all pulled
+// from the real match result the server itself recorded when that match ended
+// (see the 'end' WebSocket handler below), never trusted from the request
+// body. Single-player has no such ground truth (it's simulated entirely
+// client-side), so it stays bounds-checked only, same as before.
 app.post('/api/leaderboard', function(req, res) {
   var body = req.body || {};
   var board = body.board === 'mp' ? 'mp' : 'sp';
@@ -194,15 +200,19 @@ app.post('/api/leaderboard', function(req, res) {
   if (!initials || !Number.isFinite(score) || score <= 0 || score > 1e8) {
     return res.status(400).json({ error: 'invalid entry' });
   }
+  var combo = Math.max(0, Math.min(1e6, Math.floor(Number(body.combo)) || 0));
+  var kills = Math.max(0, Math.min(1e6, Math.floor(Number(body.kills)) || 0));
+  var duration = Math.max(0, Math.min(1e7, Math.floor(Number(body.duration)) || 0));
   if (board === 'mp') {
     sweepMpResults();
     var record = recentMpResults.get(body.matchId);
     if (!record || record.teamScore !== score) {
       return res.status(400).json({ error: 'score does not match a recent match result' });
     }
+    combo = record.combo; kills = record.teamKills; duration = record.duration;
     recentMpResults.delete(body.matchId); // one-time use — no resubmitting the same match
   }
-  stmtLbInsert.run(board, initials, score, Date.now());
+  stmtLbInsert.run(board, initials, score, combo, kills, duration, Date.now());
   res.json({ ok: true });
 });
 
@@ -227,7 +237,7 @@ const clients = new Map(); // ws -> { id, name, lobbyId }
 // lets POST /api/leaderboard verify a submitted mp score against a match that
 // actually happened, instead of trusting the client's number outright.
 // In-memory/short-lived like `lobbies`, for the same reason (see note above).
-const recentMpResults = new Map(); // matchId -> { teamScore, expiresAt }
+const recentMpResults = new Map(); // matchId -> { teamScore, teamKills, combo, duration, expiresAt }
 function sweepMpResults() {
   var now = Date.now();
   recentMpResults.forEach(function(rec, id) { if (rec.expiresAt < now) recentMpResults.delete(id); });
@@ -399,13 +409,21 @@ wss.on('connection', function(ws) {
       var lobby = lobbies.get(info.lobbyId);
       if (!lobby || lobby.hostId !== info.id) return;
       var scores = msg.scores || {};
-      var teamScore = 0;
-      Object.keys(scores).forEach(function(pid) { teamScore += (scores[pid] && scores[pid].score) || 0; });
+      var teamScore = 0, teamKills = 0;
+      Object.keys(scores).forEach(function(pid) {
+        teamScore += (scores[pid] && scores[pid].score) || 0;
+        teamKills += (scores[pid] && scores[pid].kills) || 0;
+      });
+      // Combo/elapsed are match-wide (not per-player), so trust them from the
+      // host the same way teamScore already is — the host is authoritative
+      // for the shared timer/combo throughout the match.
+      var combo = Math.max(0, Math.floor(Number(msg.peakCombo)) || 0);
+      var duration = Math.max(0, Math.floor(Number(msg.elapsed)) || 0);
       sweepMpResults();
       var matchId = genId();
-      recentMpResults.set(matchId, { teamScore: teamScore, expiresAt: Date.now() + 5 * 60 * 1000 });
+      recentMpResults.set(matchId, { teamScore: teamScore, teamKills: teamKills, combo: combo, duration: duration, expiresAt: Date.now() + 5 * 60 * 1000 });
       lobby.players.forEach(function(p) {
-        send(p.ws, 'ended', { scores: scores, matchId: matchId });
+        send(p.ws, 'ended', { scores: scores, matchId: matchId, combo: combo, duration: duration });
         var pInfo = clients.get(p.ws);
         if (pInfo) pInfo.lobbyId = null;
       });
