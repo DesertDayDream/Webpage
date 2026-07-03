@@ -892,6 +892,216 @@ function handleInitialsKey(e) {
   }
 }
 
+// === DESERT STORM THEME (procedural — no assets, no persisted data) ===
+//
+// Every visual decision below (building type, war-torn or not, sand speckle
+// placement, palm tree placement) is a pure function of data that already
+// exists (a wall's own x/y/w/h, or tile/cell grid coords) — never persisted,
+// never Math.random() (which would flicker every frame since drawMap runs
+// every frame). Mirrors map-editor.html's copy of this same theme code —
+// this page is standalone (no shared JS module system in this project), so
+// it's duplicated.
+
+// Cheap deterministic 32-bit hash of up to 4 ints + a salt — not
+// cryptographic, just stable across frames/reloads and well-distributed
+// across a handful of buckets. Math.imul avoids float-rounding loss on the
+// ~2^31-scale intermediate product, which would otherwise degrade
+// distribution. Salt convention: 0=building type, 1=war-torn boolean,
+// 2=damage/detail variant, 3=sand speckle (keyed on tile gx,gy), 4=palm
+// spawn/position (keyed on cell cgx,cgy), 10+i=per-unit offset for repeated
+// details (e.g. city HVAC blocks).
+function mercsHash(a, b, c, d, salt) {
+  let n = (a|0) * 374761393 + (b|0) * 668265263 + (c|0) * 2147483647 + (d|0) * 1274126177 + (salt|0) * 3266489917;
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  n = (n ^ (n >>> 16)) >>> 0;
+  return n;
+}
+
+const BUILDING_TYPES = ['hospital', 'apartment', 'city'];
+const WARTORN_CHANCE_PCT = 25;
+
+function getWallVisual(w) {
+  return {
+    type: BUILDING_TYPES[mercsHash(w.x, w.y, w.w, w.h, 0) % 3],
+    wartorn: mercsHash(w.x, w.y, w.w, w.h, 1) % 100 < WARTORN_CHANCE_PCT,
+    variant: mercsHash(w.x, w.y, w.w, w.h, 2),
+  };
+}
+
+// Geometric check, independent of array position/order — matches
+// borderWalls()'s own output shape (top/bottom: {w:mapW,h:bt}, left/right: {w:bt,h:mapH}).
+function isBorderWall(w, mapW, mapH) {
+  return (w.w === mapW && w.h === BORDER_THICKNESS) ||
+         (w.h === mapH && w.w === BORDER_THICKNESS);
+}
+
+const SAND_BASE  = '#c9a86a';
+const SAND_LIGHT = '#dabf8c';
+const SAND_DARK  = '#a9895c';
+const SAND_PATCH = '#b89a5f';
+const SAND_GRID  = 'rgba(90,63,32,0.12)';
+
+const BORDER_FILL = '#4a4638', BORDER_DARK = '#3a3730', BORDER_LIGHT = '#5c5848';
+const BORDER_SEG = 18; // sandbag/barrier segment spacing along the long axis
+
+function drawBorderWall(ctx, w, vx0, vx1, vy0, vy1) {
+  ctx.fillStyle = BORDER_FILL;
+  ctx.fillRect(w.x, w.y, w.w, w.h);
+  const horizontal = w.w >= w.h; // top/bottom strips are wide+thin, left/right are tall+thin
+  const len = horizontal ? w.w : w.h;
+  // Clip the segment range to the visible viewport — unlike the old 3-fill
+  // draw (cheap regardless of length), this loop's cost scales with wall
+  // length, and border walls span the entire map edge (up to ~4000px, the
+  // map editor's clamp). WALLS itself isn't culled today, so without this
+  // clip a large map would draw ~220 segments/wall every frame even off-screen.
+  const loStart = horizontal ? Math.max(0, vx0 - w.x) : Math.max(0, vy0 - w.y);
+  const loEnd   = horizontal ? Math.min(len, vx1 - w.x) : Math.min(len, vy1 - w.y);
+  const start = Math.max(2, Math.floor(loStart / BORDER_SEG) * BORDER_SEG);
+  for (let o = start; o < Math.min(len - 2, loEnd); o += BORDER_SEG) {
+    const segLen = Math.min(BORDER_SEG - 4, len - 2 - o);
+    if (segLen <= 0) continue;
+    const sx = horizontal ? w.x + o : w.x + 2;
+    const sy = horizontal ? w.y + 2 : w.y + o;
+    const sw = horizontal ? segLen : w.w - 4;
+    const sh = horizontal ? w.h - 4 : segLen;
+    ctx.fillStyle = BORDER_DARK; ctx.fillRect(sx, sy, sw, sh);
+    ctx.fillStyle = BORDER_LIGHT; ctx.fillRect(sx, sy, sw, horizontal ? 1 : Math.min(1, sh));
+  }
+}
+
+const BUILDING_PALETTE = {
+  hospital:  { outer:'#9a9688', inset:'#d8d4c8', ledge:'#c4c0b0' },
+  apartment: { outer:'#8a7048', inset:'#b89a6e', ledge:'#a4885e' },
+  city:      { outer:'#2c303c', inset:'#4e5568', ledge:'#3d4354' },
+};
+
+function drawRoofBase(ctx, w, pal) {
+  ctx.fillStyle = pal.outer;
+  ctx.fillRect(w.x, w.y, w.w, w.h);
+  ctx.fillStyle = pal.inset;
+  ctx.fillRect(w.x+2, w.y+2, Math.max(0,w.w-4), Math.max(0,w.h-4));
+  ctx.fillStyle = pal.ledge;
+  ctx.fillRect(w.x+2, w.y+2, Math.max(0,w.w-4), 2);
+  ctx.fillRect(w.x+2, w.y+2, 2, Math.max(0,w.h-4));
+}
+
+// Red cross by default; helipad ring+"H" on larger roofs when variant picks it.
+function drawHospitalDetail(ctx, w, variant) {
+  const cx = w.x + w.w/2, cy = w.y + w.h/2;
+  const big = w.w >= 40 && w.h >= 40;
+  if (big && variant % 2 === 0) {
+    ctx.strokeStyle = '#6a6858'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, Math.min(w.w,w.h)*0.32, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#f0ede0';
+    ctx.fillRect(cx-2, cy-7, 4, 14); // "H" left/right bars + crossbar
+    ctx.fillRect(cx-7, cy-2, 6, 4);
+    ctx.fillRect(cx+1, cy-2, 6, 4);
+  } else {
+    const s = Math.min(w.w, w.h) * 0.35;
+    ctx.fillStyle = '#b8262f';
+    ctx.fillRect(cx - s*0.18, cy - s*0.5, s*0.36, s);
+    ctx.fillRect(cx - s*0.5, cy - s*0.18, s, s*0.36);
+  }
+}
+
+// Grid of small AC/vent squares — column/row count adapts to size so it
+// never overcrowds a small wall.
+function drawApartmentDetail(ctx, w) {
+  const cols = Math.max(1, Math.min(3, Math.floor((w.w-8)/14)));
+  const rows = Math.max(1, Math.min(3, Math.floor((w.h-8)/14)));
+  const stepX = (w.w-8)/cols, stepY = (w.h-8)/rows;
+  for (let r=0; r<rows; r++) for (let c=0; c<cols; c++) {
+    const vx = w.x+6+c*stepX, vy = w.y+6+r*stepY;
+    ctx.fillStyle = '#6e5a3c';
+    ctx.fillRect(vx, vy, 5, 5);
+    ctx.fillStyle = '#c8ac7c';
+    ctx.fillRect(vx, vy, 5, 1);
+  }
+}
+
+// 1-2 larger HVAC blocks at a deterministic offset from variant.
+function drawCityDetail(ctx, w, variant) {
+  const uw = Math.min(w.w*0.4, 14), uh = Math.min(w.h*0.4, 14);
+  const n = w.w > 30 && w.h > 30 ? 2 : 1;
+  for (let i=0; i<n; i++) {
+    const hv = mercsHash(w.x, w.y, w.w, w.h, 10+i);
+    const ux = w.x + 4 + (hv % Math.max(1, w.w - uw - 8));
+    const uy = w.y + 4 + ((hv>>>8) % Math.max(1, w.h - uh - 8));
+    ctx.fillStyle = '#5c6478';
+    ctx.fillRect(ux, uy, uw, uh);
+    ctx.strokeStyle = '#2c303c'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(ux+2, uy+uh*0.33); ctx.lineTo(ux+uw-2, uy+uh*0.33);
+    ctx.moveTo(ux+2, uy+uh*0.66); ctx.lineTo(ux+uw-2, uy+uh*0.66);
+    ctx.stroke();
+  }
+}
+
+// Applied after the type detail, on top: cracks, a missing rubble corner,
+// and (on roughly half of war-torn walls) a soft scorch-mark gradient.
+function drawWartornOverlay(ctx, w, variant) {
+  const corner = variant % 4;
+  const cx = w.x + w.w/2, cy = w.y + w.h/2;
+  const corners = [ [w.x,w.y], [w.x+w.w,w.y], [w.x,w.y+w.h], [w.x+w.w,w.y+w.h] ];
+  const ox = corners[corner][0], oy = corners[corner][1];
+  ctx.strokeStyle = 'rgba(20,15,10,0.55)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(ox, oy);
+  const midx = ox + (cx-ox)*0.4 + ((variant>>>4)%7-3);
+  const midy = oy + (cy-oy)*0.4 + ((variant>>>8)%7-3);
+  ctx.lineTo(midx, midy);
+  ctx.lineTo(ox + (cx-ox)*0.7, oy + (cy-oy)*0.7);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(26,23,18,0.7)';
+  const rr = Math.min(w.w, w.h) * 0.22;
+  ctx.beginPath(); ctx.arc(ox, oy, rr, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(ox + (cx>ox?rr*0.6:-rr*0.6), oy, rr*0.6, 0, Math.PI*2); ctx.fill();
+
+  if (variant & 0x20) {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(w.w,w.h)*0.5);
+    g.addColorStop(0, 'rgba(10,8,6,0.45)');
+    g.addColorStop(1, 'rgba(10,8,6,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(w.x, w.y, w.w, w.h);
+  }
+}
+
+function drawBuildingWall(ctx, w, mapW, mapH, vx0, vx1, vy0, vy1) {
+  if (isBorderWall(w, mapW, mapH)) { drawBorderWall(ctx, w, vx0, vx1, vy0, vy1); return; }
+  const vis = getWallVisual(w);
+  const pal = BUILDING_PALETTE[vis.type];
+  drawRoofBase(ctx, w, pal);
+  if (vis.type === 'hospital')  drawHospitalDetail(ctx, w, vis.variant);
+  if (vis.type === 'apartment') drawApartmentDetail(ctx, w);
+  if (vis.type === 'city')      drawCityDetail(ctx, w, vis.variant);
+  if (vis.wartorn) drawWartornOverlay(ctx, w, vis.variant);
+}
+
+const PALM_CELL = 96, PALM_DENSITY_PCT = 35, PALM_PAD = 6;
+
+function rectsOverlapPad(a, b, pad) {
+  return a.x < b.x+b.w+pad && a.x+a.w+pad > b.x && a.y < b.y+b.h+pad && a.y+a.h+pad > b.y;
+}
+
+function drawPalmTree(ctx, px, py, h) {
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath(); ctx.ellipse(px, py+9, 9, 3, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#5c4429';
+  ctx.fillRect(px-2, py-6, 4, 14);
+  const baseAngles = [-70,-35,0,35,70,105];
+  for (let i=0; i<baseAngles.length; i++) {
+    const jitter = ((h >>> (i*4)) % 9) - 4;
+    const ang = (baseAngles[i]+jitter) * Math.PI/180;
+    ctx.strokeStyle = (i % 3 === 0) ? '#5a8f47' : '#3d6b34';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(px, py-6);
+    ctx.quadraticCurveTo(px+Math.cos(ang)*6, py-6+Math.sin(ang)*6-4, px+Math.cos(ang)*14, py-6+Math.sin(ang)*14);
+    ctx.stroke();
+  }
+}
+
 // === MAP DRAWING ===
 
 function drawMap(ctx) {
@@ -901,11 +1111,11 @@ function drawMap(ctx) {
   const vx1 = Math.min(MAP_W, camera.x + CW), vy1 = Math.min(MAP_H, camera.y + CH);
 
   // Floor
-  ctx.fillStyle = '#16141e';
+  ctx.fillStyle = SAND_BASE;
   ctx.fillRect(vx0, vy0, vx1 - vx0, vy1 - vy0);
 
   // Floor tile grid
-  ctx.strokeStyle = '#1c1a26';
+  ctx.strokeStyle = SAND_GRID;
   ctx.lineWidth = 1;
   const gyTop = Math.max(BORDER_THICKNESS, vy0), gyBot = Math.min(MAP_H - BORDER_THICKNESS, vy1);
   for (let x = Math.max(BORDER_THICKNESS, Math.floor(vx0/TS)*TS); x < Math.min(MAP_W - BORDER_THICKNESS, vx1); x += TS) {
@@ -915,17 +1125,53 @@ function drawMap(ctx) {
   for (let y = Math.max(BORDER_THICKNESS, Math.floor(vy0/TS)*TS); y < Math.min(MAP_H - BORDER_THICKNESS, vy1); y += TS) {
     ctx.beginPath(); ctx.moveTo(gxLeft,y); ctx.lineTo(gxRight,y); ctx.stroke();
   }
-  // Walls / obstacles
-  for (const w of WALLS) {
-    ctx.fillStyle = '#28263a';
-    ctx.fillRect(w.x, w.y, w.w, w.h);
-    ctx.fillStyle = '#3a3858';
-    ctx.fillRect(w.x+2, w.y+2, w.w-4, w.h-4);
-    // Top-left bevel highlight
-    ctx.fillStyle = '#4a4870';
-    ctx.fillRect(w.x+2, w.y+2, w.w-4, 2);
-    ctx.fillRect(w.x+2, w.y+2, 2, w.h-4);
+
+  // Sand speckle / dune-patch texture — keyed on integer tile coords so it's
+  // stable every frame (never Math.random(), which would flicker).
+  const tGx0 = Math.floor(vx0/TS), tGx1 = Math.ceil(vx1/TS);
+  const tGy0 = Math.floor(vy0/TS), tGy1 = Math.ceil(vy1/TS);
+  for (let gy = tGy0; gy < tGy1; gy++) {
+    for (let gx = tGx0; gx < tGx1; gx++) {
+      const h = mercsHash(gx, gy, 0, 0, 3);
+      const tx = gx*TS, ty = gy*TS;
+      if (h % 3 === 0) {
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = (h & 0x10) ? SAND_LIGHT : SAND_DARK;
+        ctx.fillRect(tx + (h % (TS-2)), ty + ((h>>>4) % (TS-2)), 2, 2);
+        ctx.fillRect(tx + ((h>>>8) % (TS-2)), ty + ((h>>>12) % (TS-2)), 2, 2);
+        ctx.globalAlpha = 1;
+      }
+      if (h % 9 === 0) {
+        ctx.globalAlpha = 0.15;
+        ctx.fillStyle = SAND_PATCH;
+        ctx.beginPath();
+        ctx.ellipse(tx+TS/2, ty+TS/2, TS*0.6, TS*0.35, (h%6)*0.5, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
   }
+
+  // Palm trees — decorative only, never added to collision (WALLS).
+  const pGx0 = Math.floor(vx0/PALM_CELL), pGx1 = Math.ceil(vx1/PALM_CELL);
+  const pGy0 = Math.floor(vy0/PALM_CELL), pGy1 = Math.ceil(vy1/PALM_CELL);
+  for (let cgy = pGy0; cgy < pGy1; cgy++) {
+    for (let cgx = pGx0; cgx < pGx1; cgx++) {
+      const h = mercsHash(cgx, cgy, 0, 0, 4);
+      if (h % 100 >= PALM_DENSITY_PCT) continue;
+      const px = cgx*PALM_CELL + 12 + (h % (PALM_CELL-24));
+      const py = cgy*PALM_CELL + 12 + ((h>>>8) % (PALM_CELL-24));
+      if (px < BORDER_THICKNESS+16 || py < BORDER_THICKNESS+16 ||
+          px > MAP_W-BORDER_THICKNESS-16 || py > MAP_H-BORDER_THICKNESS-16) continue;
+      const treeBox = { x: px-9, y: py-9, w: 18, h: 18 };
+      let blocked = false;
+      for (const w of WALLS) { if (rectsOverlapPad(treeBox, w, PALM_PAD)) { blocked = true; break; } }
+      if (!blocked) drawPalmTree(ctx, px, py, h);
+    }
+  }
+
+  // Walls / obstacles — building rooftops (or sandbag border) themed to Desert Storm.
+  for (const w of WALLS) drawBuildingWall(ctx, w, MAP_W, MAP_H, vx0, vx1, vy0, vy1);
 }
 
 // === PLAYER ===
