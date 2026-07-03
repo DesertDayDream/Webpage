@@ -503,7 +503,7 @@ const SPRITE_TO_CONFIG = {
 };
 
 const CONSTANT_DEFAULTS = {
-  PLAYER:        { speed:190, hp:100 },
+  PLAYER:        { speed:190, hp:100, respawnTime:15 },
   WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0 },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100 },
@@ -516,8 +516,9 @@ const CONSTANT_DEFAULTS = {
 
 const CONSTANT_SCHEMAS = {
   PLAYER: [
-    { key:'speed', label:'Move Speed', min:50, max:500, step:5, unit:'px/s' },
-    { key:'hp',    label:'Max HP',     min:10, max:500, step:5, unit:'HP'   },
+    { key:'speed',       label:'Move Speed',   min:50, max:500, step:5, unit:'px/s' },
+    { key:'hp',          label:'Max HP',       min:10, max:500, step:5, unit:'HP'   },
+    { key:'respawnTime', label:'Respawn Time (MP)', min:1, max:60, step:1, unit:'s' },
   ],
   WEAPON_PISTOL: [
     { key:'fireMode',    label:'Fire Mode',      type:'select', options:['semi','auto']   },

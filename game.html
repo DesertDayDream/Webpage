@@ -117,7 +117,7 @@ const RESERVE_AMMO_CAP = 200;
 
 // CONFIG — default values overridden by devtool (mercs_constants in localStorage)
 const _C_DEFAULTS = {
-  PLAYER:        { speed:190, hp:100 },
+  PLAYER:        { speed:190, hp:100, respawnTime:15 },
   WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0 },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100 },
@@ -500,24 +500,36 @@ const SOUNDS = {
       a.addEventListener('loadedmetadata', () => { a.currentTime = startTime; });
     }
 
-    // One-shot playback — no need to track/tear down the filter chain like
-    // Music does; once the clip ends and `a` is no longer referenced, the
-    // whole graph (source + filters) becomes eligible for GC on its own.
+    // One-shot playback, but the filter chain still needs explicit teardown:
+    // nodes connected into a Web Audio graph are kept alive by the
+    // AudioContext's own internal graph, not by JS references — letting `a`
+    // go out of scope does NOT free them. Without disconnecting on 'ended',
+    // every sound effect played over a session leaks 3 nodes permanently,
+    // which is exactly what caused audio to degrade/cut out over time.
+    let source = null, hpNode = null, lpNode = null;
     try {
       const hp = parseInt(localStorage.getItem('sound_' + name + '_' + kind + '_hp'));
       const lp = parseInt(localStorage.getItem('sound_' + name + '_' + kind + '_lp'));
       const ctx = getAudioCtx();
-      const source = ctx.createMediaElementSource(a);
-      const hpNode = ctx.createBiquadFilter();
+      source = ctx.createMediaElementSource(a);
+      hpNode = ctx.createBiquadFilter();
       hpNode.type = 'highpass';
       hpNode.frequency.value = Number.isFinite(hp) ? hp : 20;
-      const lpNode = ctx.createBiquadFilter();
+      lpNode = ctx.createBiquadFilter();
       lpNode.type = 'lowpass';
       lpNode.frequency.value = Number.isFinite(lp) ? lp : 20000;
       source.connect(hpNode); hpNode.connect(lpNode); lpNode.connect(ctx.destination);
     } catch(e) {
       // Web Audio unavailable/blocked — fall back to plain <audio> playback.
     }
+
+    const cleanup = () => {
+      try { if (source) source.disconnect(); } catch(e) {}
+      try { if (hpNode) hpNode.disconnect(); } catch(e) {}
+      try { if (lpNode) lpNode.disconnect(); } catch(e) {}
+    };
+    a.addEventListener('ended', cleanup);
+    a.addEventListener('error', cleanup);
 
     a.play().catch(() => {}); // ignore — autoplay can be blocked before the first user gesture
   },
@@ -920,7 +932,13 @@ function drawMap(ctx) {
 
 function updatePlayer(dt) {
   if (STATE !== 'playing' && STATE !== 'mpPlaying') return;
-  if (STATE === 'mpPlaying' && mpDowned) return; // downed players are frozen until the match ends
+  if (STATE === 'mpPlaying' && mpDowned) {
+    // Frozen (no movement/aim/shoot) until the countdown set by devtool's
+    // PLAYER > Respawn Time runs out.
+    mpRespawnTimer -= dt;
+    if (mpRespawnTimer <= 0) respawnPlayer();
+    return;
+  }
 
   // Aim angle (world-space)
   player.rawAngle = Math.atan2(mouse.worldY - player.y, mouse.worldX - player.x);
@@ -1858,7 +1876,8 @@ function drawMpHUD(ctx) {
     ctx.fillStyle = '#c84040';
     ctx.font = '28px VT323, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('DOWNED — SPECTATING', CW/2, CH - 40);
+    const secs = Math.max(0, Math.ceil(mpRespawnTimer));
+    ctx.fillText('DOWNED — RESPAWNING IN ' + secs + 's', CW/2, CH - 40);
     ctx.globalAlpha = 1;
     ctx.textAlign = 'left';
   }
@@ -2047,6 +2066,7 @@ let mpFinalScores = {};
 // actual match instead of trusting whatever number the client sends.
 let mpMatchId = null;
 let mpDowned = false;          // this client's own player hit 0 HP but the match continues
+let mpRespawnTimer = 0;        // seconds remaining until this downed player respawns
 let nextEnemyId = 1;
 let nextPickupId = 1;
 let netBroadcastTimer = 0;
@@ -2146,6 +2166,7 @@ function startMultiplayerMatch(msg) {
   nextEnemyId = 1; nextPickupId = 1;
   netBroadcastTimer = 0;
   mpDowned = false;
+  mpRespawnTimer = 0;
   mpMatchId = null;
   myCharacter = loadMyCharacter();
   myCharacterSent = false;
@@ -2177,10 +2198,27 @@ function nearestPlayerTo(x, y) {
   return best;
 }
 
-// This client's own player HP hit 0 mid-match — freeze locally and keep
-// receiving network updates. The match itself only ends when the host says so.
+// This client's own player HP hit 0 mid-match — freeze locally, start a
+// countdown to an automatic respawn (devtool's PLAYER > Respawn Time), and
+// keep receiving network updates in the meantime. The match itself only
+// ends when the timer runs out — being downed is now always temporary.
 function goDowned() {
   mpDowned = true;
+  mpRespawnTimer = CONFIG.PLAYER.respawnTime;
+}
+
+// Brings this client's own player back into the fight once the respawn
+// countdown reaches zero — keeps whatever weapon/ammo they had, just
+// restores HP/position and a brief window of contact-damage immunity.
+function respawnPlayer() {
+  mpDowned = false;
+  mpRespawnTimer = 0;
+  player.hp = CONFIG.PLAYER.hp; player.maxHp = CONFIG.PLAYER.hp;
+  player.x = MAP_CONFIG.playerStart.x; player.y = MAP_CONFIG.playerStart.y;
+  camera.x = Math.max(0, Math.min(MAP_W - CW, player.x - CW/2));
+  camera.y = Math.max(0, Math.min(MAP_H - CH, player.y - CH/2));
+  player.invincible = 2;
+  spawnFlash('RESPAWNED', player.x, player.y - 20, '#3ef83e');
 }
 
 // Host-only: tells the server (and thus every client, itself included, via
@@ -2250,6 +2288,13 @@ function updateMultiplayerNet(dt) {
       milestone: comboMilestone, milestoneTimer: comboMilestoneTimer,
     }});
 
+    // Being downed is now temporary (goDowned/respawnPlayer) — a single
+    // player going down never ends the match anymore. But if literally
+    // everyone happens to be down at the same moment (a full wipe), that's
+    // still a hard end rather than waiting on independent respawn timers.
+    // Remote hp is broadcast as 0 while a player is downed (see the
+    // 'player' state payload below), so rp.hp <= 0 doubles as "currently
+    // downed" from the host's point of view.
     const allDowned = mpDowned && Array.from(remotePlayers.values()).every(rp => rp.hp <= 0);
     if (allDowned) endMultiplayerMatch();
   }
