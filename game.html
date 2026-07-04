@@ -1646,8 +1646,17 @@ function spawnEnemy() {
 
   // Spawn on viewport edges around whichever player this box is anchored to —
   // in MP that's a random connected player (not always the host's own camera),
-  // so enemies don't only ever appear near the host.
-  const anchor = STATE === 'mpPlaying' ? mpSpawnAnchor() : { x: camera.x + CW/2, y: camera.y + CH/2 };
+  // so enemies don't only ever appear near the host. Clamp the anchor the same
+  // way the camera itself is clamped (camera.x/y at lines ~1357-1358) — a raw
+  // player position can be as close as PLAYER_SIZE/2 to the map edge, which
+  // would otherwise push the viewport-sized spawn box past MAP_W/MAP_H and
+  // spawn an enemy outside the border wall, where it gets stuck forever since
+  // enemies have no pathfinding to walk back around a solid wall.
+  const rawAnchor = STATE === 'mpPlaying' ? mpSpawnAnchor() : { x: camera.x + CW/2, y: camera.y + CH/2 };
+  const anchor = {
+    x: Math.max(CW/2, Math.min(MAP_W - CW/2, rawAnchor.x)),
+    y: Math.max(CH/2, Math.min(MAP_H - CH/2, rawAnchor.y)),
+  };
   const vL = anchor.x - CW/2 + 40, vR = anchor.x + CW/2 - 40;
   const vT = anchor.y - CH/2 + 40, vB = anchor.y + CH/2 - 40;
   let ex, ey;
