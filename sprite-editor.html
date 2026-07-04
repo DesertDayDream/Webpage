@@ -145,17 +145,6 @@
         <input type="checkbox" id="chk-grid" checked>
         <label for="chk-grid">Show pixel grid</label>
       </div>
-      <div class="checkbox-row" style="margin-top:6px;">
-        <input type="checkbox" id="chk-hit-toggle" checked>
-        <label for="chk-hit-toggle">Paint mode: Hittable (unchecked = Immune)</label>
-      </div>
-      <div class="checkbox-row" style="margin-top:6px;">
-        <input type="checkbox" id="chk-show-hitzones">
-        <label for="chk-show-hitzones">Show Hit Zones</label>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <button class="btn small danger" id="btn-clear-hitmask">[ Clear Hit Mask ]</button>
-      </div>
     </div>
 
     <div>
@@ -193,29 +182,19 @@ function getSpriteSize(name) {
 
 // Mirrors devtool.html's applyServerConfigToLocalStorage — this page is
 // standalone (no shared JS module system in this project), and only cares
-// about the sprites/hit-mask slices of the published config.
+// about the sprites slice of the published config.
 function applyServerConfigToLocalStorage(cfg) {
-  if (!cfg) return;
-  if (cfg.sprites) {
-    Object.entries(cfg.sprites).forEach(([name, entry]) => {
-      if (entry.type === 'anim') {
-        localStorage.setItem('sprite_' + name + '_frames', JSON.stringify(entry.frames));
-        localStorage.setItem('sprite_' + name + '_fps', entry.fps || 12);
-        localStorage.removeItem('sprite_' + name);
-      } else if (entry.type === 'image') {
-        localStorage.setItem('sprite_' + name, entry.url);
-        localStorage.removeItem('sprite_' + name + '_frames');
-      }
-    });
-  }
-  // Without this, opening sprite-editor.html fresh (no prior local editing
-  // session in this browser) would silently ignore any already-published hit
-  // mask for this sprite when seeding the editor.
-  if (cfg.hitMasks) {
-    Object.entries(cfg.hitMasks).forEach(([name, url]) => {
-      localStorage.setItem('sprite_' + name + '_hitmask', url);
-    });
-  }
+  if (!cfg || !cfg.sprites) return;
+  Object.entries(cfg.sprites).forEach(([name, entry]) => {
+    if (entry.type === 'anim') {
+      localStorage.setItem('sprite_' + name + '_frames', JSON.stringify(entry.frames));
+      localStorage.setItem('sprite_' + name + '_fps', entry.fps || 12);
+      localStorage.removeItem('sprite_' + name);
+    } else if (entry.type === 'image') {
+      localStorage.setItem('sprite_' + name, entry.url);
+      localStorage.removeItem('sprite_' + name + '_frames');
+    }
+  });
 }
 
 function showAuthGate(msg, sub) {
@@ -294,26 +273,6 @@ function initEditor(name) {
     seedImg.src = seedUrl;
   }
 
-  // === Hit-mask bitmap — parallel canvas, same dimensions as `work`. Alpha>0
-  // per pixel = hittable, alpha=0 = immune/unset. Only ever persisted if it's
-  // actually "in play" for this sprite — see maskInPlay / the save handler.
-  let hitMask = document.createElement('canvas');
-  hitMask.width = native.w; hitMask.height = native.h;
-  let maskInPlay = false; // true if a saved mask existed on open, or the artist paints an immune pixel this session
-
-  const savedMaskUrl = localStorage.getItem('sprite_' + name + '_hitmask');
-  if (savedMaskUrl) {
-    maskInPlay = true;
-    const maskImg = new Image();
-    maskImg.onload = () => {
-      const hctx = hitMask.getContext('2d');
-      hctx.imageSmoothingEnabled = false;
-      hctx.drawImage(maskImg, 0, 0, hitMask.width, hitMask.height);
-      render();
-    };
-    maskImg.src = savedMaskUrl;
-  }
-
   // === Resolution buttons ===
   const resOptions = [{ label:'Native ' + native.w + '×' + native.h, w:native.w, h:native.h }];
   if (!(native.w === 22 && native.h === 22)) resOptions.push({ label:'22×22', w:22, h:22 });
@@ -348,14 +307,6 @@ function initEditor(name) {
     rctx.imageSmoothingEnabled = false;
     rctx.drawImage(work, 0, 0, work.width, work.height, 0, 0, newW, newH);
     work = resized;
-
-    const resizedMask = document.createElement('canvas');
-    resizedMask.width = newW; resizedMask.height = newH;
-    const mctx = resizedMask.getContext('2d');
-    mctx.imageSmoothingEnabled = false; // keeps the mask's alpha binary (0 or 255) through the resize, no antialiased blur
-    mctx.drawImage(hitMask, 0, 0, hitMask.width, hitMask.height, 0, 0, newW, newH);
-    hitMask = resizedMask;
-
     setActiveResButton(newW, newH);
     render();
   }
@@ -384,21 +335,11 @@ function initEditor(name) {
     render();
   };
 
-  document.getElementById('btn-clear-hitmask').onclick = () => {
-    hitMask.getContext('2d').clearRect(0, 0, hitMask.width, hitMask.height);
-    maskInPlay = false;
-    localStorage.removeItem('sprite_' + name + '_hitmask'); // deletes immediately, not deferred to Save
-    render();
-  };
-
   // === Pixel grid canvas (zoomed) ===
   const pixelCanvas = document.getElementById('pixel-canvas');
   const pctx = pixelCanvas.getContext('2d');
   const chkGrid = document.getElementById('chk-grid');
   chkGrid.addEventListener('change', render);
-  const chkHitToggle = document.getElementById('chk-hit-toggle');
-  const chkShowHitzones = document.getElementById('chk-show-hitzones');
-  chkShowHitzones.addEventListener('change', render);
 
   function cellSize() {
     return Math.max(8, Math.floor(480 / Math.max(work.width, work.height)));
@@ -411,17 +352,6 @@ function initEditor(name) {
     pctx.imageSmoothingEnabled = false;
     pctx.clearRect(0, 0, pixelCanvas.width, pixelCanvas.height);
     pctx.drawImage(work, 0, 0, pixelCanvas.width, pixelCanvas.height);
-
-    if (chkShowHitzones.checked) {
-      const mctx = hitMask.getContext('2d');
-      const maskData = mctx.getImageData(0, 0, hitMask.width, hitMask.height).data;
-      pctx.fillStyle = 'rgba(62,248,62,0.45)'; // translucent green, matches --green
-      for (let y = 0; y < hitMask.height; y++) {
-        for (let x = 0; x < hitMask.width; x++) {
-          if (maskData[(y*hitMask.width+x)*4+3] > 0) pctx.fillRect(x*cs, y*cs, cs, cs);
-        }
-      }
-    }
 
     if (chkGrid.checked) {
       pctx.strokeStyle = 'rgba(255,255,255,0.08)';
@@ -448,32 +378,15 @@ function initEditor(name) {
   function paintAt(px, py) {
     if (px < 0 || py < 0 || px >= work.width || py >= work.height) return;
     const wctx = work.getContext('2d');
-    const mctx = hitMask.getContext('2d');
     if (currentTool === 'pencil') {
       wctx.fillStyle = currentColor;
       wctx.fillRect(px, py, 1, 1);
-      paintMaskCell(mctx, px, py);
     } else if (currentTool === 'eraser') {
       wctx.clearRect(px, py, 1, 1);
-      mctx.clearRect(px, py, 1, 1); // eraser always clears the mask cell too, regardless of the paint-mode toggle
     } else if (currentTool === 'bucket') {
       floodFill(px, py, currentColor);
     }
     render();
-  }
-
-  // Writes the current paint-mode toggle into the hit-mask canvas for one cell:
-  // Hittable mode → opaque (color is irrelevant; only alpha is ever read back),
-  // Immune mode → cleared/transparent. Marks the mask "in play" the first time
-  // an immune pixel is actually painted (see btn-save below).
-  function paintMaskCell(mctx, px, py) {
-    if (chkHitToggle.checked) {
-      mctx.fillStyle = '#ffffff';
-      mctx.fillRect(px, py, 1, 1);
-    } else {
-      mctx.clearRect(px, py, 1, 1);
-      maskInPlay = true;
-    }
   }
 
   function floodFill(startX, startY, colorHex) {
@@ -502,24 +415,6 @@ function initEditor(name) {
       stack.push([x+1,y],[x-1,y],[x,y+1],[x,y-1]);
     }
     wctx.putImageData(imgData, 0, 0);
-
-    // Stamp the identical filled region into the hit-mask canvas — reuses
-    // `seen` so the mask's footprint always matches exactly what the bucket
-    // just painted in `work`, instead of re-deriving contiguity from the
-    // mask's own (possibly different) pre-existing pixels.
-    const mctx = hitMask.getContext('2d');
-    const hittable = chkHitToggle.checked;
-    if (!hittable) maskInPlay = true;
-    const maskData = mctx.getImageData(0, 0, w, h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (!seen[y*w+x]) continue;
-        const mi = idx(x, y);
-        if (hittable) { maskData.data[mi]=255; maskData.data[mi+1]=255; maskData.data[mi+2]=255; maskData.data[mi+3]=255; }
-        else          { maskData.data[mi]=0;   maskData.data[mi+1]=0;   maskData.data[mi+2]=0;   maskData.data[mi+3]=0;   }
-      }
-    }
-    mctx.putImageData(maskData, 0, 0);
   }
 
   function hexToRgb(hex) {
@@ -562,13 +457,6 @@ function initEditor(name) {
     localStorage.setItem('sprite_' + name, url);
     localStorage.removeItem('sprite_' + name + '_frames');
     localStorage.removeItem('sprite_' + name + '_fps');
-    // Only persist a hit mask if it's actually "in play" for this sprite (existed
-    // on open, or the artist painted at least one immune pixel this session) —
-    // sprites nobody ever touches this feature for never gain a `_hitmask` key,
-    // keeping the fast/legacy fully-hittable path for the vast majority of enemies.
-    if (maskInPlay) {
-      localStorage.setItem('sprite_' + name + '_hitmask', hitMask.toDataURL('image/png'));
-    }
     const statusEl = document.getElementById('status-msg');
     statusEl.textContent = 'Saved — ' + new Date().toLocaleTimeString();
     setTimeout(() => { statusEl.textContent = ''; }, 3000);

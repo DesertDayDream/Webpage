@@ -81,11 +81,6 @@ function applyServerConfigToLocalStorage(cfg) {
       localStorage.setItem('weapon_' + wn + '_anchor', JSON.stringify(data));
     });
   }
-  if (cfg.hitMasks) {
-    Object.entries(cfg.hitMasks).forEach(([name, url]) => {
-      localStorage.setItem('sprite_' + name + '_hitmask', url);
-    });
-  }
   if (cfg.soundtrack) {
     if (cfg.soundtrack.menu)     localStorage.setItem('mercs_soundtrack_menu', JSON.stringify(cfg.soundtrack.menu));
     if (cfg.soundtrack.gameplay) localStorage.setItem('mercs_soundtrack_gameplay', JSON.stringify(cfg.soundtrack.gameplay));
@@ -507,55 +502,6 @@ const SPRITES = {
     ctx.restore();
   },
 };
-
-// Per-enemy-type pixel hit mask — alpha>0 marks a hittable pixel, alpha=0 is
-// immune/unset. No entry for a type means "no mask, fully hittable within the
-// existing circular check" — today's behavior, unchanged. See isPixelHittable().
-const HIT_MASKS = {};
-
-function loadHitMasks() {
-  Object.keys(ENEMY_DEFS).forEach(name => {
-    const url = localStorage.getItem('sprite_' + name + '_hitmask');
-    if (!url) return;
-    const img = new Image();
-    img.onload = () => {
-      const w = img.naturalWidth, h = img.naturalHeight;
-      const off = document.createElement('canvas');
-      off.width = w; off.height = h;
-      const octx = off.getContext('2d');
-      octx.imageSmoothingEnabled = false;
-      octx.drawImage(img, 0, 0);
-      HIT_MASKS[name] = { w, h, data: octx.getImageData(0, 0, w, h).data };
-    };
-    img.src = url;
-  });
-}
-
-// Inverts SPRITES.draw()'s transform (translate(cx,cy) → rotate(angle) →
-// translate(-w/2,-h/2), then drawImage at local (0,0)-(w,h)) to map a world
-// point to a mask pixel, then samples its alpha. Returns true (hittable)
-// whenever there's no mask for this enemy type — the legacy/default behavior
-// is unrestricted, identical to today.
-function isPixelHittable(e, worldX, worldY) {
-  const mask = HIT_MASKS[e.type];
-  if (!mask) return true;
-
-  const angle = e.angle || 0;
-  const cosA = Math.cos(angle), sinA = Math.sin(angle);
-  const dx = worldX - e.x, dy = worldY - e.y;
-  const rx =  dx * cosA + dy * sinA;
-  const ry = -dx * sinA + dy * cosA;
-
-  const size = e.def.size; // enemies are always drawn w===h===e.def.size
-  const lx = rx + size / 2;
-  const ly = ry + size / 2;
-  if (lx < 0 || ly < 0 || lx >= size || ly >= size) return false; // outside the sprite square entirely — treat as a miss
-
-  const mx = Math.min(mask.w - 1, Math.floor(lx / size * mask.w));
-  const my = Math.min(mask.h - 1, Math.floor(ly / size * mask.h));
-  const alpha = mask.data[(my * mask.w + mx) * 4 + 3];
-  return alpha > 0;
-}
 
 // Shared by SOUNDS and Music — one AudioContext for the whole page, since
 // every filtered sound (SFX or music) needs to route through the same
@@ -1733,16 +1679,6 @@ function mpSpawnAnchor() {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// Interpolates an angle toward a target by the shortest angular path (never
-// the "long way" around the circle) — same ±π normalization idiom doMelee
-// already uses for its aim-vs-enemy angle-diff check.
-function lerpAngle(from, to, rate) {
-  let diff = to - from;
-  while (diff >  Math.PI) diff -= Math.PI*2;
-  while (diff < -Math.PI) diff += Math.PI*2;
-  return from + diff * rate;
-}
-
 function updateEnemies(dt) {
   for (let i = enemies.length-1; i >= 0; i--) {
     const e = enemies[i];
@@ -1762,11 +1698,6 @@ function updateEnemies(dt) {
       const dx = target.x - e.x;
       const dy = target.y - e.y;
       const dist = Math.sqrt(dx*dx + dy*dy);
-      // Canonical facing angle — reuses the exact same chase vector driving
-      // movement below, so every client (host included) renders/hit-tests this
-      // enemy facing whoever it's actually chasing, instead of each viewer
-      // computing its own angle toward itself (see drawEnemies, old behavior).
-      if (dist > 0.01) e.angle = Math.atan2(dy, dx) + Math.PI/2;
       if (dist > 2) {
         const nx = e.x + (dx/dist) * e.def.speed * dt;
         const ny = e.y + (dy/dist) * e.def.speed * dt;
@@ -1780,9 +1711,6 @@ function updateEnemies(dt) {
       const lerpRate = Math.min(1, 12 * dt);
       e.x += (e.targetX - e.x) * lerpRate;
       e.y += (e.targetY - e.y) * lerpRate;
-      if (e.targetAngle !== undefined) {
-        e.angle = e.angle !== undefined ? lerpAngle(e.angle, e.targetAngle, lerpRate) : e.targetAngle;
-      }
     }
 
     // Contact damage — every client checks its own local player against
@@ -1830,7 +1758,7 @@ function drawEnemies(ctx) {
       ctx.restore();
     }
 
-    const angle = e.angle || 0; // fallback for the first frame before updateEnemies has computed one
+    const angle = Math.atan2(player.y - e.y, player.x - e.x) + Math.PI/2;
     SPRITES.draw(e.type, ctx, e.x, e.y, e.def.size, e.def.size, angle, 'ENEMY_BASIC');
 
     // HP bar
@@ -1994,17 +1922,15 @@ function updateBullets(dt) {
       if (e.deathTimer >= 0) continue;
       const dist = Math.hypot(b.x - e.x, b.y - e.y);
       if (dist < e.def.size/2 + 3) {
-        hit = true; // consume the bullet either way — an immune pixel is armor, not a miss
-        if (isPixelHittable(e, b.x, b.y)) {
-          if (STATE === 'mpPlaying' && !isHost) {
-            // Optimistic local feedback only — the host resolves the real hp/kill.
-            e.flashTimer = 0.06;
-            SOUNDS.play(e.type, 'damage');
-            Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
-          } else {
-            applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
-          }
+        if (STATE === 'mpPlaying' && !isHost) {
+          // Optimistic local feedback only — the host resolves the real hp/kill.
+          e.flashTimer = 0.06;
+          SOUNDS.play(e.type, 'damage');
+          Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+        } else {
+          applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
         }
+        hit = true;
         break;
       }
     }
@@ -2651,9 +2577,9 @@ Net.on('state', msg => {
       const prev = prevById.get(de.id);
       const e = Object.assign({}, de, {
         def: ENEMY_DEFS[de.type] || ENEMY_DEFS.ENEMY_BASIC,
-        targetX: de.x, targetY: de.y, targetAngle: de.angle,
+        targetX: de.x, targetY: de.y,
       });
-      if (prev) { e.x = prev.x; e.y = prev.y; e.angle = prev.angle; }
+      if (prev) { e.x = prev.x; e.y = prev.y; }
       return e;
     });
 
@@ -2870,7 +2796,7 @@ function updateMultiplayerNet(dt) {
     Net.send('state', { kind: 'hostState', data: {
       enemies: enemies.map(e => ({
         id: e.id, x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp, type: e.type,
-        flashTimer: e.flashTimer, deathTimer: e.deathTimer, angle: e.angle,
+        flashTimer: e.flashTimer, deathTimer: e.deathTimer,
       })),
       pickups: pickups.map(p => ({
         id: p.id, kind: p.kind, x: p.x, y: p.y, timer: p.timer,
@@ -3519,7 +3445,6 @@ function loop(now) {
 // === INIT ===
 
 SPRITES.load();
-loadHitMasks();
 Music.load();
 
 canvas.addEventListener('click', e => {
