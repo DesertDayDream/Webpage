@@ -122,9 +122,9 @@ const _C_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
   WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0 },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
-  ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0 },
-  ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0 },
-  ENEMY_BRUTE:   { speed:36,  hp:220, dmg:28,  score:350, size:30, unlockAt:60, spawnChance:100, maxAlive:0 },
+  ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
+  ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
+  ENEMY_BRUTE:   { speed:36,  hp:220, dmg:28,  score:350, size:30, unlockAt:60, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   PICKUP_AMMO:   { dropChance:28, amountMin:5,  amountMax:10 },
   PICKUP_HEALTH: { dropChance:14, healMin:20,   healMax:40   },
   PICKUP_WEAPON: { dropChance:8 },
@@ -816,6 +816,12 @@ let bullets  = [];
 let pickups  = [];
 let particles= [];
 let flashes  = []; // { text, x, y, color, timer, maxTimer }
+
+// Per-type respawn gating for spawnEnemy() — Respawn Delay / Do Not Respawn sliders
+// in devtool.html. Keyed by enemy type name, only ever read/written authoritatively
+// (host or SP), same as spawnEnemy()/killEnemy() themselves.
+let enemyLastDeathTime = {};   // type -> elapsed-seconds timestamp of its most recent death
+let enemyNeverRespawn  = new Set(); // types with noRespawn:'on' that have died at least once
 
 let score     = 0;
 let combo     = 0;
@@ -1631,15 +1637,18 @@ function _drawWeapon(ctx, handX, handY, rawAngle) {
 function spawnEnemy() {
   // Which enemies can appear is driven by the "ACTIVE" toggle in devtool.html
   // (ENEMY_DEFS), gated further by each one's own Unlock At time, Spawn Chance,
-  // and Max Alive cap (0 = unlimited). A type at its cap is dropped from this
-  // wave's roll entirely — not re-rolled — so it never eats a spawn slot that
-  // would otherwise go to an enemy that's actually eligible right now.
+  // Max Alive cap (0 = unlimited), Respawn Delay, and Do Not Respawn. A type
+  // that fails any of these is dropped from this wave's roll entirely — not
+  // re-rolled — so it never eats a spawn slot that would otherwise go to an
+  // enemy that's actually eligible right now.
   // Selection is weighted the same way pickup drops are — a single roll across
   // each eligible enemy's chance, so equal chances (the default) stay uniform.
   const types = Object.keys(ENEMY_DEFS).filter(t => {
     const d = ENEMY_DEFS[t];
     if (elapsed < d.unlockAt || d.spawnChance <= 0) return false;
     if (d.maxAlive > 0 && enemies.filter(e => e.type === t && e.deathTimer < 0).length >= d.maxAlive) return false;
+    if (d.noRespawn === 'on' && enemyNeverRespawn.has(t)) return false;
+    if (d.respawnDelay > 0 && enemyLastDeathTime[t] !== undefined && elapsed - enemyLastDeathTime[t] < d.respawnDelay) return false;
     return true;
   });
   if (types.length === 0) return;
@@ -1814,6 +1823,8 @@ function drawEnemies(ctx) {
 function killEnemy(e, isMelee, killerId) {
   e.deathTimer = 0;
   SOUNDS.play(e.type, 'death');
+  enemyLastDeathTime[e.type] = elapsed;
+  if (e.def.noRespawn === 'on') enemyNeverRespawn.add(e.type);
   const mp = STATE === 'mpPlaying';
 
   const milestones = {5:'GOOD!', 10:'GREAT!!', 20:'EXCELLENT!!!', 30:'★ LEGENDARY ★'};
@@ -3403,6 +3414,7 @@ function resetPlayerForMatch() {
   enemies = []; bullets = []; remoteBullets = []; pickups = []; particles = []; flashes = [];
   mainTimer = 150; elapsed = 0;
   spawnTimer = 0; spawnRate = 3.0;
+  enemyLastDeathTime = {}; enemyNeverRespawn = new Set();
 }
 
 function startGame() {
