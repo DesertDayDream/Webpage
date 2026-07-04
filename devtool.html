@@ -803,6 +803,61 @@ function addEnemy() {
   setStatus('Added ' + id);
 }
 
+// Permanently removes a custom enemy from the game entirely — sprite art,
+// sounds, active/loot state, and any per-enemy constant overrides — not just
+// its uploaded art (clearSlot only resets the sprite image back to default).
+// Built-in enemies (ENEMY_BASIC/FAST/BRUTE) are never deletable — only ones
+// added via [ + Add ] — since game.html hard-codes ENEMY_BASIC as a fallback.
+function deleteEnemy(name) {
+  if (!confirm('Permanently delete ' + name + '? This removes its sprite, sounds, and settings entirely. This cannot be undone.')) return;
+
+  // Sprite art (static + all animation variants)
+  localStorage.removeItem('sprite_' + name);
+  localStorage.removeItem('sprite_' + name + '_frames');
+  localStorage.removeItem('sprite_' + name + '_fps');
+  (SPRITE_ANIM_STATES[name] || []).forEach(st => {
+    localStorage.removeItem(animFrKey(name, st));
+    localStorage.removeItem(animFpsKey(name, st));
+  });
+
+  // Sound effects
+  ['attack', 'damage', 'death'].forEach(kind => {
+    localStorage.removeItem('sound_' + name + '_' + kind);
+    localStorage.removeItem('sound_' + name + '_' + kind + '_vol');
+    localStorage.removeItem('sound_' + name + '_' + kind + '_start');
+    localStorage.removeItem('sound_' + name + '_' + kind + '_hp');
+    localStorage.removeItem('sound_' + name + '_' + kind + '_lp');
+  });
+
+  // Active-spawn list + per-enemy constant overrides (Size/HP/etc. sliders)
+  setEnemyActive(name, false);
+  resetConstants(name);
+
+  // Its own custom-enemy registration
+  saveCustomEnemiesList(loadCustomEnemiesList().filter(id => id !== name));
+
+  // In-memory lookup tables — otherwise it'd keep showing up in the UI/publish
+  delete SPRITE_FNS[name];
+  delete SPRITE_TO_CONFIG[name];
+  delete CONSTANT_DEFAULTS[name];
+  delete CONSTANT_SCHEMAS[name];
+  delete SPRITE_ANIM_STATES[name];
+  const gi = SPRITE_GROUPS.enemies.indexOf(name);
+  if (gi !== -1) SPRITE_GROUPS.enemies.splice(gi, 1);
+  const bi = BUILTIN_NAMES.indexOf(name);
+  if (bi !== -1) BUILTIN_NAMES.splice(bi, 1);
+
+  // updateLivePreview() (called by rebuildUI() below) assumes currentSpriteName
+  // is always a real sprite name (getSpriteSize calls .startsWith on it
+  // unguarded) — fall back to a safe default rather than leaving it pointed
+  // at the now-deleted name.
+  if (currentSpriteName === name) currentSpriteName = 'PLAYER_S';
+  if (selectedSlot === name) selectedSlot = null;
+
+  rebuildUI();
+  setStatus('Deleted ' + name);
+}
+
 // === ACTIVE ENEMIES (drives which enemies can spawn in game.html) ===
 
 const ACTIVE_ENEMIES_KEY = 'mercs_active_enemies';
@@ -1329,6 +1384,16 @@ function buildSlotRow(name, container) {
     }, 'toggle-active');
     activeToggle.label.title = 'Let this enemy spawn in the game';
     actions.appendChild(activeToggle.label);
+
+    // Only enemies added via [ + Add ] can be deleted — the 3 built-ins are
+    // hard-coded fallbacks elsewhere and must always exist.
+    if (loadCustomEnemiesList().includes(name)) {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'btn danger';
+      deleteBtn.textContent = '[ Delete Enemy ]';
+      deleteBtn.onclick = () => deleteEnemy(name);
+      actions.appendChild(deleteBtn);
+    }
   }
 
   mainRow.appendChild(previewWrap); mainRow.appendChild(info); mainRow.appendChild(actions);
