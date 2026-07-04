@@ -1989,33 +1989,23 @@ function updateBullets(dt) {
       continue;
     }
 
-    // Pick the CLOSEST enemy whose radius contains this point, not just the
-    // first one in array order — with boss-sized enemies (size up to 400,
-    // radius up to ~200px) now possible, a bullet clearly aimed at a small
-    // normal enemy standing near a boss could also fall inside the boss's much
-    // larger circle; without this, whichever enemy happened to come first in
-    // the array would silently steal/absorb the shot.
-    let target = null, bestDist = Infinity;
+    let hit = false;
     for (const e of enemies) {
       if (e.deathTimer >= 0) continue;
       const dist = Math.hypot(b.x - e.x, b.y - e.y);
-      if (dist < e.def.size/2 + 3 && dist < bestDist) {
-        bestDist = dist;
-        target = e;
-      }
-    }
-    const hit = !!target;
-    if (target) {
-      // consume the bullet either way — an immune pixel is armor, not a miss
-      if (isPixelHittable(target, b.x, b.y)) {
-        if (STATE === 'mpPlaying' && !isHost) {
-          // Optimistic local feedback only — the host resolves the real hp/kill.
-          target.flashTimer = 0.06;
-          SOUNDS.play(target.type, 'damage');
-          Net.send('hit', { enemyId: target.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
-        } else {
-          applyDamageToEnemy(target, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+      if (dist < e.def.size/2 + 3) {
+        hit = true; // consume the bullet either way — an immune pixel is armor, not a miss
+        if (isPixelHittable(e, b.x, b.y)) {
+          if (STATE === 'mpPlaying' && !isHost) {
+            // Optimistic local feedback only — the host resolves the real hp/kill.
+            e.flashTimer = 0.06;
+            SOUNDS.play(e.type, 'damage');
+            Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+          } else {
+            applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+          }
         }
+        break;
       }
     }
     if (hit) bullets.splice(i, 1);
