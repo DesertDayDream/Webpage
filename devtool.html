@@ -867,6 +867,108 @@ function deleteEnemy(name) {
   setStatus('Deleted ' + name);
 }
 
+// === DUPLICATE (enemies + weapons) ===
+
+// Copies every localStorage-backed asset a sprite can have — static/animated
+// art and its sound effects — from an existing sprite onto a brand-new name.
+// Shared by duplicateEnemy()/duplicateWeapon() since the storage layout is
+// identical for both; only the constants/registration side differs.
+function copySpriteAssets(sourceName, destName, soundKinds) {
+  ['', '_frames', '_fps'].forEach(suffix => {
+    const v = localStorage.getItem('sprite_' + sourceName + suffix);
+    if (v !== null) localStorage.setItem('sprite_' + destName + suffix, v);
+  });
+  (SPRITE_ANIM_STATES[sourceName] || []).forEach(st => {
+    const fr = localStorage.getItem(animFrKey(sourceName, st));
+    const fps = localStorage.getItem(animFpsKey(sourceName, st));
+    if (fr !== null) localStorage.setItem(animFrKey(destName, st), fr);
+    if (fps !== null) localStorage.setItem(animFpsKey(destName, st), fps);
+  });
+  (soundKinds || []).forEach(kind => {
+    if (localStorage.getItem('sound_' + sourceName + '_' + kind) === null) return; // nothing authored for this kind
+    ['', '_vol', '_start', '_hp', '_lp'].forEach(suffix => {
+      const v = localStorage.getItem('sound_' + sourceName + '_' + kind + suffix);
+      if (v !== null) localStorage.setItem('sound_' + destName + '_' + kind + suffix, v);
+    });
+  });
+}
+
+// Copies a sprite's *effective* current stats (defaults merged with any saved
+// slider override) into the new name's own override, so the duplicate starts
+// out stat-identical to the source regardless of whether the source's values
+// came from CONSTANT_DEFAULTS or a devtool tweak.
+function copyConstants(sourceName, destName) {
+  const sourceKey = SPRITE_TO_CONFIG[sourceName], destKey = SPRITE_TO_CONFIG[destName];
+  if (!sourceKey || !destKey) return;
+  const saved = loadSavedConstants();
+  saved[destKey] = Object.assign({}, CONSTANT_DEFAULTS[sourceKey], saved[sourceKey] || {});
+  saveMercsConstants(saved);
+}
+
+// Same prompt/slug/dedupe pattern as addEnemy()/addWeapon(), seeded with a
+// friendly guess derived from the source's own name instead of a generic label.
+function promptDuplicateName(sourceName, idPrefix) {
+  const friendly = sourceName.replace(/^(ENEMY_|WEAPON_)/, '').replace(/_/g, ' ');
+  const label = prompt('Name this duplicate:', friendly + ' Copy');
+  if (label === null) return null;
+  const slug = label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const baseId = idPrefix + (slug || 'COPY');
+  let id = baseId, n = 2;
+  while (BUILTIN_NAMES.includes(id)) { id = baseId + '_' + n; n++; }
+  return id;
+}
+
+// Duplicates any enemy (built-in or custom) into a new custom enemy — same
+// art, sounds, effective stats (HP/size/Max Alive/Respawn Delay/etc.) and
+// ACTIVE state as the source, immediately editable/independent afterward.
+function duplicateEnemy(sourceName) {
+  const id = promptDuplicateName(sourceName, 'ENEMY_');
+  if (id === null) return;
+
+  registerEnemy(id);
+  copySpriteAssets(sourceName, id, ['attack', 'damage', 'death']);
+  copyConstants(sourceName, id);
+  setEnemyActive(id, isEnemyActive(sourceName));
+
+  const custom = loadCustomEnemiesList();
+  custom.push(id);
+  saveCustomEnemiesList(custom);
+
+  rebuildUI();
+  selectSlot(id);
+  setStatus('Duplicated ' + sourceName + ' as ' + id);
+}
+
+// Duplicates any weapon (built-in or custom, ranged or melee) into a new
+// custom weapon — same art, sound, effective stats, held-item anchor position,
+// and loot-pool membership/drop weight as the source. Never touches which
+// weapon is actually equipped — that stays a separate, explicit choice.
+function duplicateWeapon(category, sourceName) {
+  const id = promptDuplicateName(sourceName, 'WEAPON_');
+  if (id === null) return;
+
+  registerWeapon(category, id);
+  copySpriteAssets(sourceName, id, ['attack']);
+  copyConstants(sourceName, id);
+  if (ANCHOR_DEFAULTS[sourceName] || localStorage.getItem(ANCHOR_KEY(sourceName))) {
+    ANCHOR_DEFAULTS[id] = loadAnchorData(sourceName);
+  }
+  if (isInLootPool(sourceName)) {
+    toggleLootPool(id, true);
+    setWeaponDropWeight(id, getWeaponDropWeight(sourceName));
+  }
+
+  const custom = loadCustomWeaponsList();
+  const listKey = category === 'ranged' ? 'ranged' : 'melee';
+  if (!custom[listKey]) custom[listKey] = [];
+  custom[listKey].push(id);
+  saveCustomWeaponsList(custom);
+
+  rebuildUI();
+  selectSlot(id);
+  setStatus('Duplicated ' + sourceName + ' as ' + id);
+}
+
 // === ACTIVE ENEMIES (drives which enemies can spawn in game.html) ===
 
 const ACTIVE_ENEMIES_KEY = 'mercs_active_enemies';
@@ -1373,6 +1475,13 @@ function buildSlotRow(name, container) {
       format: v => v,
       onChange: v => setWeaponDropWeight(name, v),
     });
+
+    // Any weapon (built-in or custom) can be duplicated into a new one —
+    // handy for a stat/art variant without rebuilding it from scratch.
+    const dupWeaponBtn = document.createElement('button');
+    dupWeaponBtn.className = 'btn'; dupWeaponBtn.textContent = '[ Duplicate ]';
+    dupWeaponBtn.onclick = () => duplicateWeapon(cat, name);
+    actions.appendChild(dupWeaponBtn);
   }
 
   // Unlimited ammo toggle — ranged weapons only; melee has no ammo/reload concept
@@ -1393,6 +1502,13 @@ function buildSlotRow(name, container) {
     }, 'toggle-active');
     activeToggle.label.title = 'Let this enemy spawn in the game';
     actions.appendChild(activeToggle.label);
+
+    // Any enemy (built-in or custom) can be duplicated into a new one —
+    // handy for a stat/art variant (e.g. a boss) without starting from scratch.
+    const dupEnemyBtn = document.createElement('button');
+    dupEnemyBtn.className = 'btn'; dupEnemyBtn.textContent = '[ Duplicate ]';
+    dupEnemyBtn.onclick = () => duplicateEnemy(name);
+    actions.appendChild(dupEnemyBtn);
 
     // Only enemies added via [ + Add ] can be deleted — the 3 built-ins are
     // hard-coded fallbacks elsewhere and must always exist.
