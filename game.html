@@ -564,6 +564,21 @@ function getAudioCtx() {
   window.addEventListener(evt, () => { if (sharedAudioCtx) sharedAudioCtx.resume().catch(() => {}); }, { passive: true });
 });
 
+// Hard cap on simultaneously-alive one-shot SFX voices (each is a distinct
+// <audio> element + a MediaElementSourceNode + 2 BiquadFilterNodes, all held
+// open until 'ended'/'error'). Bursty moments this session's weapons can
+// trigger — a rocket's splash hitting many enemies at once, a bouncing
+// bullet ricocheting through several, etc. — can spawn far more of these
+// concurrently than earlier weapons ever did. Browsers have an undocumented
+// but very real practical limit on live HTMLMediaElements/AudioNodes; once
+// it's hit, SFX silently stop producing sound (their <audio> elements are
+// still "playing", they just never reach an output) while music keeps
+// working fine, since Music only ever holds one node chain alive at a time.
+// Evicting the oldest voice once the cap is hit keeps the live count bounded
+// forever, regardless of how many sounds fire in a single burst.
+const MAX_CONCURRENT_SFX = 24;
+const activeSfx = [];
+
 // Sound effects for the character (damage-taken/death), each enemy
 // (attack/damage/death), and each weapon (attack — swapping weapons via a
 // pickup mid-match changes which sound plays, so this reads localStorage
@@ -574,6 +589,9 @@ const SOUNDS = {
   play(name, kind) {
     const url = localStorage.getItem('sound_' + name + '_' + kind);
     if (!url) return;
+
+    if (activeSfx.length >= MAX_CONCURRENT_SFX) activeSfx.shift().stop();
+
     // Bus fader (player's personal SFX Volume) × channel fader (this specific
     // sound's own volume, set in devtool.html's mixer) — same gain-staging
     // as a real mixer.
@@ -618,11 +636,18 @@ const SOUNDS = {
       // Web Audio unavailable/blocked — fall back to plain <audio> playback.
     }
 
+    const voice = { stop: () => {} }; // placeholder so cleanup() below can remove it from activeSfx by reference
     const cleanup = () => {
+      try { a.pause(); } catch(e) {} // no-op if it already finished naturally
       try { if (source) source.disconnect(); } catch(e) {}
       try { if (hpNode) hpNode.disconnect(); } catch(e) {}
       try { if (lpNode) lpNode.disconnect(); } catch(e) {}
+      const idx = activeSfx.indexOf(voice);
+      if (idx !== -1) activeSfx.splice(idx, 1);
     };
+    voice.stop = cleanup;
+    activeSfx.push(voice);
+
     a.addEventListener('ended', cleanup);
     a.addEventListener('error', cleanup);
 
