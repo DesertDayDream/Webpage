@@ -518,6 +518,22 @@ function getAudioCtx() {
   return sharedAudioCtx;
 }
 
+// Some browsers (Safari/iOS especially) auto-suspend an AudioContext after a
+// period with no audible output — e.g. sitting on the post-match screen
+// between rounds — and will only honor resume() when it's called
+// synchronously inside a real user-gesture event handler, not merely
+// "sometime after" one. The resume-on-suspended check inside getAudioCtx()
+// above only ever runs from SOUNDS.play()/Music, which fire from the
+// animation-frame loop rather than the gesture itself, so it doesn't count.
+// Once suspended that way, it silently stays suspended for the rest of the
+// page's life (every sound keeps "playing" — the <audio> elements are fine —
+// but nothing audible comes out, since their output is routed entirely
+// through this context's graph) until the page is reloaded. Resuming
+// directly on the next real gesture fixes that without needing a reload.
+['pointerdown', 'keydown', 'touchstart'].forEach(evt => {
+  window.addEventListener(evt, () => { if (sharedAudioCtx) sharedAudioCtx.resume().catch(() => {}); }, { passive: true });
+});
+
 // Sound effects for the character (damage-taken/death), each enemy
 // (attack/damage/death), and each weapon (attack — swapping weapons via a
 // pickup mid-match changes which sound plays, so this reads localStorage
