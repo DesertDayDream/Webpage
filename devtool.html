@@ -390,7 +390,7 @@ const SPRITE_GROUPS = {
   enemies:       ['ENEMY_BASIC', 'ENEMY_FAST', 'ENEMY_BRUTE'],
   rangedWeapons: ['WEAPON_PISTOL'],
   meleeWeapons:  ['WEAPON_KNIFE'],
-  pickups:       ['PICKUP_AMMO', 'PICKUP_HEALTH', 'PICKUP_WEAPON'],
+  pickups:       ['PICKUP_AMMO', 'PICKUP_HEALTH', 'PICKUP_WEAPON', 'PICKUP_ARMOR', 'PICKUP_SPEED'],
 };
 const BUILTIN_NAMES = [
   ...SPRITE_GROUPS.characters,
@@ -503,6 +503,32 @@ const SPRITE_FNS = {
     ctx.fillStyle = '#c8a840'; ctx.fillRect(2,4,w-4,2); ctx.fillRect(2,h-4,w-4,2);
     ctx.fillStyle = '#e8d090'; ctx.fillRect(w/2-5,h/2-1,10,2);
   },
+  PICKUP_ARMOR(ctx, w, h) {
+    ctx.fillStyle = '#0e3a4a';
+    ctx.beginPath();
+    ctx.moveTo(w/2, 1); ctx.lineTo(w-2, h*0.3); ctx.lineTo(w-2, h*0.6);
+    ctx.quadraticCurveTo(w/2, h-1, w/2, h-1);
+    ctx.quadraticCurveTo(2, h*0.6, 2, h*0.6);
+    ctx.lineTo(2, h*0.3); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#40c8f0';
+    ctx.beginPath();
+    ctx.moveTo(w/2, 4); ctx.lineTo(w-5, h*0.32); ctx.lineTo(w-5, h*0.58);
+    ctx.quadraticCurveTo(w/2, h-4, w/2, h-4);
+    ctx.quadraticCurveTo(5, h*0.58, 5, h*0.58);
+    ctx.lineTo(5, h*0.32); ctx.closePath(); ctx.fill();
+  },
+  PICKUP_SPEED(ctx, w, h) {
+    ctx.fillStyle = '#8a7000';
+    ctx.beginPath();
+    ctx.moveTo(w*0.55, 1); ctx.lineTo(w*0.2, h*0.55); ctx.lineTo(w*0.45, h*0.55);
+    ctx.lineTo(w*0.4, h-1); ctx.lineTo(w*0.85, h*0.4); ctx.lineTo(w*0.55, h*0.4);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#f0e040';
+    ctx.beginPath();
+    ctx.moveTo(w*0.55, 4); ctx.lineTo(w*0.28, h*0.52); ctx.lineTo(w*0.5, h*0.52);
+    ctx.lineTo(w*0.46, h-4); ctx.lineTo(w*0.76, h*0.44); ctx.lineTo(w*0.5, h*0.44);
+    ctx.closePath(); ctx.fill();
+  },
 };
 
 // === CONSTANTS DEFINITIONS (mirrored from game.html _C_DEFAULTS) ===
@@ -524,6 +550,8 @@ const SPRITE_TO_CONFIG = {
   PICKUP_AMMO:   'PICKUP_AMMO',
   PICKUP_HEALTH: 'PICKUP_HEALTH',
   PICKUP_WEAPON: 'PICKUP_WEAPON',
+  PICKUP_ARMOR:  'PICKUP_ARMOR',
+  PICKUP_SPEED:  'PICKUP_SPEED',
 };
 
 const CONSTANT_DEFAULTS = {
@@ -536,6 +564,8 @@ const CONSTANT_DEFAULTS = {
   PICKUP_AMMO:   { dropChance:28, amountMin:5,  amountMax:10 },
   PICKUP_HEALTH: { dropChance:14, healMin:20,   healMax:40   },
   PICKUP_WEAPON: { dropChance:8 },
+  PICKUP_ARMOR:  { dropChance:10, hits:3 },
+  PICKUP_SPEED:  { dropChance:10, duration:8, multiplier:1.5 },
 };
 
 const CONSTANT_SCHEMAS = {
@@ -614,6 +644,15 @@ const CONSTANT_SCHEMAS = {
   PICKUP_WEAPON: [
     { key:'dropChance', label:'Drop Chance', min:0,  max:100, step:1, unit:'%'  },
   ],
+  PICKUP_ARMOR: [
+    { key:'dropChance', label:'Drop Chance', min:0,  max:100, step:1, unit:'%'  },
+    { key:'hits',       label:'Hits',        min:1,  max:20,  step:1, unit:''   },
+  ],
+  PICKUP_SPEED: [
+    { key:'dropChance', label:'Drop Chance', min:0,  max:100, step:1,   unit:'%' },
+    { key:'duration',   label:'Duration',    min:1,  max:30,  step:1,   unit:'s' },
+    { key:'multiplier', label:'Speed Mult',  min:1.1,max:3,   step:0.1, unit:'x' },
+  ],
 };
 
 function loadSavedConstants() {
@@ -690,6 +729,8 @@ const SPRITE_ANIM_STATES = {
   PICKUP_AMMO:   [],
   PICKUP_HEALTH: [],
   PICKUP_WEAPON: [],
+  PICKUP_ARMOR:  [],
+  PICKUP_SPEED:  [],
 };
 
 function animFrKey(n, st)  { return 'sprite_' + n + '_anim_' + st + '_frames'; }

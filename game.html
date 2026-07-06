@@ -128,6 +128,8 @@ const _C_DEFAULTS = {
   PICKUP_AMMO:   { dropChance:28, amountMin:5,  amountMax:10 },
   PICKUP_HEALTH: { dropChance:14, healMin:20,   healMax:40   },
   PICKUP_WEAPON: { dropChance:8 },
+  PICKUP_ARMOR:  { dropChance:10, hits:3 },
+  PICKUP_SPEED:  { dropChance:10, duration:8, multiplier:1.5 },
 };
 const CONFIG = (function() {
   const c = JSON.parse(JSON.stringify(_C_DEFAULTS));
@@ -410,6 +412,34 @@ const SPRITE_FNS = {
     ctx.fillRect(w/2-2, 4, 4, h-8);
     ctx.fillRect(4, h/2-2, w-8, 4);
   },
+  PICKUP_ARMOR(ctx, w, h) {
+    // Shield outline
+    ctx.fillStyle = '#0e3a4a';
+    ctx.beginPath();
+    ctx.moveTo(w/2, 1); ctx.lineTo(w-2, h*0.3); ctx.lineTo(w-2, h*0.6);
+    ctx.quadraticCurveTo(w/2, h-1, w/2, h-1);
+    ctx.quadraticCurveTo(2, h*0.6, 2, h*0.6);
+    ctx.lineTo(2, h*0.3); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#40c8f0';
+    ctx.beginPath();
+    ctx.moveTo(w/2, 4); ctx.lineTo(w-5, h*0.32); ctx.lineTo(w-5, h*0.58);
+    ctx.quadraticCurveTo(w/2, h-4, w/2, h-4);
+    ctx.quadraticCurveTo(5, h*0.58, 5, h*0.58);
+    ctx.lineTo(5, h*0.32); ctx.closePath(); ctx.fill();
+  },
+  PICKUP_SPEED(ctx, w, h) {
+    // Lightning bolt
+    ctx.fillStyle = '#8a7000';
+    ctx.beginPath();
+    ctx.moveTo(w*0.55, 1); ctx.lineTo(w*0.2, h*0.55); ctx.lineTo(w*0.45, h*0.55);
+    ctx.lineTo(w*0.4, h-1); ctx.lineTo(w*0.85, h*0.4); ctx.lineTo(w*0.55, h*0.4);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#f0e040';
+    ctx.beginPath();
+    ctx.moveTo(w*0.55, 4); ctx.lineTo(w*0.28, h*0.52); ctx.lineTo(w*0.5, h*0.52);
+    ctx.lineTo(w*0.46, h-4); ctx.lineTo(w*0.76, h*0.44); ctx.lineTo(w*0.5, h*0.44);
+    ctx.closePath(); ctx.fill();
+  },
 };
 
 // === FACING & WEAPON SYSTEM ===
@@ -606,6 +636,8 @@ function pickupSoundName(kind) {
   if (kind === 'health') return 'PICKUP_HEALTH';
   if (kind === 'ammo')   return 'PICKUP_AMMO';
   if (kind === 'weapon') return 'PICKUP_WEAPON';
+  if (kind === 'armor')  return 'PICKUP_ARMOR';
+  if (kind === 'speed')  return 'PICKUP_SPEED';
   return null;
 }
 
@@ -827,6 +859,8 @@ const player = {
   fireCd:0, // time until the weapon can cycle again, like a real firearm's rate of fire
   flashTimer:0,
   invincible:0, // brief invincibility after hit
+  armor:0, // remaining Armor pickup charges — each one fully blocks one hit, see damagePlayer()
+  speedBoostTimer:0, // seconds remaining on a Speed Boost pickup — see updatePlayer()
 };
 
 let enemies  = [];
@@ -1367,8 +1401,12 @@ function updatePlayer(dt) {
   if (keys.has('a') || keys.has('arrowleft'))  dx -= 1;
   if (keys.has('d') || keys.has('arrowright')) dx += 1;
   if (dx && dy) { dx *= 0.707; dy *= 0.707; }
-  const nx = player.x + dx * CONFIG.PLAYER.speed * dt;
-  const ny = player.y + dy * CONFIG.PLAYER.speed * dt;
+
+  if (player.speedBoostTimer > 0) player.speedBoostTimer = Math.max(0, player.speedBoostTimer - dt);
+  const speedMult = player.speedBoostTimer > 0 ? CONFIG.PICKUP_SPEED.multiplier : 1;
+
+  const nx = player.x + dx * CONFIG.PLAYER.speed * speedMult * dt;
+  const ny = player.y + dy * CONFIG.PLAYER.speed * speedMult * dt;
   const res = resolveWalls(nx, ny, PLAYER_SIZE);
   player.x = res.nx; player.y = res.ny;
 
@@ -1735,6 +1773,28 @@ function lerpAngle(from, to, rate) {
   return from + diff * rate;
 }
 
+// Applies damage to the local player, shared by contact damage (below) and
+// self-inflicted splash damage (explodeSplash()) so an Armor pickup's charges
+// behave consistently everywhere the player can be hurt. Each charge fully
+// blocks one hit — regardless of its damage amount — before any hp is lost.
+function damagePlayer(dmg) {
+  player.flashTimer = 0.15;
+  player.invincible = 0.5;
+  if (player.armor > 0) {
+    player.armor--;
+    spawnFlash('ARMOR -1', player.x, player.y - 20, '#40c8f0');
+    SOUNDS.play('PLAYER', 'damage');
+    return;
+  }
+  player.hp -= dmg;
+  SOUNDS.play('PLAYER', 'damage');
+  if (player.hp <= 0) {
+    player.hp = 0;
+    SOUNDS.play('PLAYER', 'death');
+    if (STATE === 'mpPlaying') goDowned(); else endGame();
+  }
+}
+
 function updateEnemies(dt) {
   for (let i = enemies.length-1; i >= 0; i--) {
     const e = enemies[i];
@@ -1783,16 +1843,8 @@ function updateEnemies(dt) {
     const pdist = Math.hypot(player.x - e.x, player.y - e.y);
     if (STATE !== 'mpPlaying' || !mpDowned) {
       if (player.invincible <= 0 && pdist < (PLAYER_SIZE + e.def.size) / 2 + 2) {
-        player.hp -= e.def.dmg;
-        player.flashTimer = 0.15;
-        player.invincible = 0.5;
         SOUNDS.play(e.type, 'attack');
-        SOUNDS.play('PLAYER', 'damage');
-        if (player.hp <= 0) {
-          player.hp = 0;
-          SOUNDS.play('PLAYER', 'death');
-          if (STATE === 'mpPlaying') goDowned(); else endGame();
-        }
+        damagePlayer(e.def.dmg);
       }
     }
 
@@ -1889,6 +1941,7 @@ function killEnemy(e, isMelee, killerId) {
   // Pickup drops driven by CONFIG
   const roll = Math.random() * 100;
   const ph = CONFIG.PICKUP_HEALTH, pa = CONFIG.PICKUP_AMMO, pw = CONFIG.PICKUP_WEAPON;
+  const par = CONFIG.PICKUP_ARMOR, psp = CONFIG.PICKUP_SPEED;
   if (roll < ph.dropChance) {
     pickups.push({ id: nextPickupId++, kind:'health', x: e.x, y: e.y, amount: ph.healMin + Math.floor(Math.random()*(ph.healMax - ph.healMin + 1)), timer:0 });
     SOUNDS.play('PICKUP_HEALTH', 'spawn');
@@ -1902,6 +1955,12 @@ function killEnemy(e, isMelee, killerId) {
       pickups.push({ id: nextPickupId++, kind:'weapon', x: e.x, y: e.y, timer:0, weaponName: drop.name, category: drop.category });
       SOUNDS.play('PICKUP_WEAPON', 'spawn');
     }
+  } else if (roll < ph.dropChance + pa.dropChance + pw.dropChance + par.dropChance) {
+    pickups.push({ id: nextPickupId++, kind:'armor', x: e.x, y: e.y, timer:0 });
+    SOUNDS.play('PICKUP_ARMOR', 'spawn');
+  } else if (roll < ph.dropChance + pa.dropChance + pw.dropChance + par.dropChance + psp.dropChance) {
+    pickups.push({ id: nextPickupId++, kind:'speed', x: e.x, y: e.y, timer:0 });
+    SOUNDS.play('PICKUP_SPEED', 'spawn');
   }
 
   // Spawn particles
@@ -2073,17 +2132,7 @@ function explodeSplash(x, y) {
     const pdist = Math.hypot(player.x - x, player.y - y);
     if (pdist < radius) {
       const dmg = Math.round(EQUIPPED_RANGED.bulletDmg * (1 - pdist / radius));
-      if (dmg > 0) {
-        player.hp -= dmg;
-        player.flashTimer = 0.15;
-        player.invincible = 0.5;
-        SOUNDS.play('PLAYER', 'damage');
-        if (player.hp <= 0) {
-          player.hp = 0;
-          SOUNDS.play('PLAYER', 'death');
-          if (STATE === 'mpPlaying') goDowned(); else endGame();
-        }
-      }
+      if (dmg > 0) damagePlayer(dmg);
     }
   }
 
@@ -2346,6 +2395,14 @@ function updatePickups(dt) {
           player.meleeCd = 0;
         }
         spawnFlash('EQUIPPED ' + p.weaponName.replace('WEAPON_','').replace(/_/g,' '), p.x, p.y - 10, '#3ef83e');
+      } else if (p.kind === 'armor') {
+        player.armor += CONFIG.PICKUP_ARMOR.hits;
+        spawnFlash('+' + CONFIG.PICKUP_ARMOR.hits + ' ARMOR', p.x, p.y - 10, '#40c8f0');
+      } else if (p.kind === 'speed') {
+        // Refreshes to the full duration rather than stacking — a buff timer,
+        // not an accumulating resource like ammo/hp.
+        player.speedBoostTimer = CONFIG.PICKUP_SPEED.duration;
+        spawnFlash('SPEED BOOST', p.x, p.y - 10, '#f0e040');
       }
       pickups.splice(i, 1);
       // Tell the host this pickup is gone so another player's client (which
@@ -2376,6 +2433,10 @@ function drawPickups(ctx) {
       ctx.translate(p.x - w/2, p.y + bob - h/2);
       drawWeaponIcon(ctx, p.weaponName, w, h, fallback);
       ctx.restore();
+    } else if (p.kind === 'armor') {
+      SPRITES.draw('PICKUP_ARMOR', ctx, p.x, p.y + bob, 18, 18, 0);
+    } else if (p.kind === 'speed') {
+      SPRITES.draw('PICKUP_SPEED', ctx, p.x, p.y + bob, 18, 18, 0);
     }
     ctx.globalAlpha = 1;
   }
@@ -2523,6 +2584,27 @@ function drawEquippedWeaponsPanel(ctx) {
   });
 }
 
+// Shared by drawHUD/drawMpHUD — a compact strip just below the LOADOUT panel
+// showing active Armor charges / Speed Boost time remaining. Hidden entirely
+// (draws nothing, takes no space) when neither is active, so ordinary play
+// isn't cluttered with an empty box.
+function drawStatusEffects(ctx) {
+  if (player.armor <= 0 && player.speedBoostTimer <= 0) return;
+  const lines = [];
+  if (player.armor > 0) lines.push({ text: 'ARMOR x' + player.armor, color: '#40c8f0' });
+  if (player.speedBoostTimer > 0) lines.push({ text: 'SPEED ' + player.speedBoostTimer.toFixed(1) + 's', color: '#f0e040' });
+
+  const x = 8, y = 122, w = 160, h = 10 + lines.length * 16;
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#3a384e'; ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
+  lines.forEach((line, i) => {
+    ctx.fillStyle = line.color; ctx.font = '14px VT323, monospace';
+    ctx.fillText(line.text, x + 8, y + 15 + i * 16);
+  });
+}
+
 // Shared by drawHUD (single-player) and drawMpHUD (multiplayer's shared team
 // combo) — same flash-and-scale text at center bottom either way.
 function drawComboMilestone(ctx) {
@@ -2592,6 +2674,7 @@ function drawHUD(ctx) {
   }
 
   drawEquippedWeaponsPanel(ctx);
+  drawStatusEffects(ctx);
 
   // Top right: score + combo
   ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
@@ -2677,6 +2760,7 @@ function drawMpHUD(ctx) {
   }
 
   drawEquippedWeaponsPanel(ctx);
+  drawStatusEffects(ctx);
 
   // Top right: live scoreboard (host-authoritative, broadcast to everyone)
   const entries = Object.entries(playerScores).sort((a, b) => b[1].score - a[1].score).slice(0, 4);
@@ -3789,6 +3873,7 @@ function resetPlayerForMatch() {
   player.reloading = false; player.reloadTimer = 0;
   player.rawAngle = 0; player.facing = 'S'; player.meleeCd = 0; player.fireCd = 0;
   player.flashTimer = 0; player.invincible = 0;
+  player.armor = 0; player.speedBoostTimer = 0;
   enemies = []; bullets = []; remoteBullets = []; pickups = []; particles = []; flashes = []; shockwaves = []; beams = [];
   mainTimer = 150; elapsed = 0;
   spawnTimer = 0; spawnRate = 3.0;
