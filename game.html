@@ -120,7 +120,7 @@ const RESERVE_AMMO_CAP = 200;
 // CONFIG — default values overridden by devtool (mercs_constants in localStorage)
 const _C_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
-  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0 },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off' },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
@@ -1926,6 +1926,11 @@ function spawnBullet() {
   const originX = player.x + anchor.x + Math.cos(aimAngle) * GUN_LENGTH;
   const originY = player.y + anchor.y + Math.sin(aimAngle) * GUN_LENGTH;
   const spreadRad = EQUIPPED_RANGED.spreadAngle * Math.PI / 180;
+  // Splash weapons (e.g. a rocket launcher) render as a bigger orange projectile
+  // instead of the standard bullet dot, so they visually read as explosive.
+  const isRocket = EQUIPPED_RANGED.splashRadius > 0;
+  const bulletColor = isRocket ? '#ff7a1a' : '#f0e040';
+  const bulletSize = isRocket ? 6 : 3;
 
   const spawned = [];
   for (let i = 0; i < EQUIPPED_RANGED.pelletCount; i++) {
@@ -1935,6 +1940,8 @@ function spawnBullet() {
       dx: Math.cos(angle) * EQUIPPED_RANGED.bulletSpeed,
       dy: Math.sin(angle) * EQUIPPED_RANGED.bulletSpeed,
       distTravelled: 0,
+      color: bulletColor,
+      size: bulletSize,
     };
     bullets.push(b);
     spawned.push(b);
@@ -1944,9 +1951,82 @@ function spawnBullet() {
   // draw the same trail; each shooter's own client still resolves its own hits.
   if (STATE === 'mpPlaying') {
     Net.send('state', { kind: 'shot', data: {
-      bullets: spawned.map(b => ({ x:b.x, y:b.y, dx:b.dx, dy:b.dy })),
+      bullets: spawned.map(b => ({ x:b.x, y:b.y, dx:b.dx, dy:b.dy, color:b.color, size:b.size })),
       range: EQUIPPED_RANGED.bulletRange,
     }});
+  }
+}
+
+// Splash-damage explosion at (x,y) — triggered by any ranged weapon with
+// splashRadius > 0 (e.g. a rocket launcher), from either exit path in
+// updateBullets(). Linear falloff: full EQUIPPED_RANGED.bulletDmg at the
+// impact point, scaling to 0 at splashRadius. Mirrors doMelee()'s exact
+// "loop every enemy, send one discrete 'hit' message per enemy" pattern —
+// MP-safe with zero server.js changes (server.js's 'hit' relay destructures
+// {enemyId,dmg,isMelee} field-by-field, so an array payload would NOT work
+// without editing server.js; N discrete messages, like melee, does).
+function explodeSplash(x, y) {
+  const radius = EQUIPPED_RANGED.splashRadius;
+  if (radius <= 0) return; // defensive — callers already gate on this
+
+  for (const e of enemies) {
+    if (e.deathTimer >= 0) continue;
+    const dist = Math.hypot(e.x - x, e.y - y);
+    if (dist >= radius) continue;
+    const dmg = Math.round(EQUIPPED_RANGED.bulletDmg * (1 - dist / radius));
+    if (dmg <= 0) continue;
+    if (STATE === 'mpPlaying' && !isHost) {
+      // Optimistic local feedback only — the host resolves the real hp/kill.
+      e.flashTimer = 0.06;
+      SOUNDS.play(e.type, 'damage');
+      Net.send('hit', { enemyId: e.id, dmg, isMelee: false });
+    } else {
+      applyDamageToEnemy(e, dmg, false, Net.playerId);
+    }
+  }
+
+  // Self-damage — shooter only (never teammates/other players), per-weapon
+  // opt-in, purely local: no network message needed, exactly like the
+  // contact-damage idiom in updateEnemies (every client checks its own local
+  // player independently).
+  if (EQUIPPED_RANGED.selfDamage === 'on' && player.invincible <= 0 &&
+      (STATE !== 'mpPlaying' || !mpDowned)) {
+    const pdist = Math.hypot(player.x - x, player.y - y);
+    if (pdist < radius) {
+      const dmg = Math.round(EQUIPPED_RANGED.bulletDmg * (1 - pdist / radius));
+      if (dmg > 0) {
+        player.hp -= dmg;
+        player.flashTimer = 0.15;
+        player.invincible = 0.5;
+        SOUNDS.play('PLAYER', 'damage');
+        if (player.hp <= 0) {
+          player.hp = 0;
+          SOUNDS.play('PLAYER', 'death');
+          if (STATE === 'mpPlaying') goDowned(); else endGame();
+        }
+      }
+    }
+  }
+
+  // Explosion particle burst — bigger/orange variant of killEnemy's death burst.
+  for (let i = 0; i < 16; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 60 + Math.random() * 140;
+    particles.push({
+      x, y,
+      dx: Math.cos(a) * spd, dy: Math.sin(a) * spd,
+      color: Math.random() < 0.5 ? '#ff8c1a' : '#ffd23f',
+      life: 0.25 + Math.random() * 0.35,
+      maxLife: 0.6,
+      size: 3 + Math.random() * 5,
+    });
+  }
+
+  // Cosmetic-only sync to other clients — mirrors the 'melee' kind exactly:
+  // damage for remote clients' own local enemy copies is already resolved by
+  // the discrete 'hit' messages above; this just draws the burst.
+  if (STATE === 'mpPlaying') {
+    Net.send('state', { kind: 'explosion', data: { x, y } });
   }
 }
 
@@ -1959,6 +2039,7 @@ function updateBullets(dt) {
 
     if (b.distTravelled > EQUIPPED_RANGED.bulletRange || pointInWall(b.x, b.y) ||
         b.x < 0 || b.x > MAP_W || b.y < 0 || b.y > MAP_H) {
+      if (EQUIPPED_RANGED.splashRadius > 0) explodeSplash(b.x, b.y);
       bullets.splice(i, 1);
       continue;
     }
@@ -1968,7 +2049,9 @@ function updateBullets(dt) {
       if (e.deathTimer >= 0) continue;
       const dist = Math.hypot(b.x - e.x, b.y - e.y);
       if (dist < e.def.size/2 + 3) {
-        if (STATE === 'mpPlaying' && !isHost) {
+        if (EQUIPPED_RANGED.splashRadius > 0) {
+          explodeSplash(b.x, b.y);
+        } else if (STATE === 'mpPlaying' && !isHost) {
           // Optimistic local feedback only — the host resolves the real hp/kill.
           e.flashTimer = 0.06;
           SOUNDS.play(e.type, 'damage');
@@ -2000,17 +2083,20 @@ function updateRemoteBullets(dt) {
 }
 
 function drawBullets(ctx) {
-  ctx.fillStyle = '#f0e040';
-  ctx.shadowColor = '#f0e040';
-  ctx.shadowBlur = 6;
   for (const b of bullets) {
+    ctx.fillStyle = b.color || '#f0e040';
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.shadowBlur = 6;
     ctx.beginPath();
-    ctx.arc(b.x, b.y, 3, 0, Math.PI*2);
+    ctx.arc(b.x, b.y, b.size || 3, 0, Math.PI*2);
     ctx.fill();
   }
   for (const b of remoteBullets) {
+    ctx.fillStyle = b.color || '#f0e040';
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.shadowBlur = 6;
     ctx.beginPath();
-    ctx.arc(b.x, b.y, 3, 0, Math.PI*2);
+    ctx.arc(b.x, b.y, b.size || 3, 0, Math.PI*2);
     ctx.fill();
   }
   ctx.shadowBlur = 0;
@@ -2645,7 +2731,8 @@ Net.on('state', msg => {
     const d = msg.data;
     SOUNDS.play((remotePlayers.get(msg.from) || {}).weaponName || 'WEAPON_PISTOL', 'attack');
     (d.bullets || []).forEach(b => {
-      remoteBullets.push({ x:b.x, y:b.y, dx:b.dx, dy:b.dy, distTravelled:0, range:d.range });
+      remoteBullets.push({ x:b.x, y:b.y, dx:b.dx, dy:b.dy, distTravelled:0, range:d.range,
+        color: b.color || '#f0e040', size: b.size || 3 });
     });
   } else if (msg.kind === 'melee') {
     let rp = remotePlayers.get(msg.from);
@@ -2664,6 +2751,22 @@ Net.on('state', msg => {
           color: '#f0c840', life:0.15, maxLife:0.15, size:4,
         });
       }
+    }
+  } else if (msg.kind === 'explosion') {
+    // Cosmetic-only sync (see explodeSplash()) — damage was already resolved
+    // by the shooter's own client via discrete 'hit' messages; this just
+    // replays the same burst so it shows up in the right place for everyone.
+    for (let i = 0; i < 16; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const spd = 60 + Math.random() * 140;
+      particles.push({
+        x: msg.data.x, y: msg.data.y,
+        dx: Math.cos(a) * spd, dy: Math.sin(a) * spd,
+        color: Math.random() < 0.5 ? '#ff8c1a' : '#ffd23f',
+        life: 0.25 + Math.random() * 0.35,
+        maxLife: 0.6,
+        size: 3 + Math.random() * 5,
+      });
     }
   }
 });

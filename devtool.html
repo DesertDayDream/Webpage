@@ -528,7 +528,7 @@ const SPRITE_TO_CONFIG = {
 
 const CONSTANT_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
-  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0 },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off' },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
@@ -555,6 +555,8 @@ const CONSTANT_SCHEMAS = {
     { key:'bulletRange', label:'Bullet Range',   min:50,  max:2000, step:10, unit:'px'   },
     { key:'pelletCount', label:'Pellet Count',   min:1,   max:20,   step:1,  unit:''     },
     { key:'spreadAngle', label:'Spread',         min:0,   max:45,   step:0.5,unit:'°'    },
+    { key:'splashRadius',label:'Splash Radius',  min:0,   max:400,  step:5,  unit:'px'   },
+    { key:'selfDamage',  label:'Self Damage',    type:'select', options:['off','on']     },
   ],
   WEAPON_KNIFE: [
     { key:'meleeDmg',   label:'Melee DMG',      min:1,   max:500,  step:1,  unit:''   },
@@ -860,6 +862,76 @@ function deleteEnemy(name) {
   // is always a real sprite name (getSpriteSize calls .startsWith on it
   // unguarded) — fall back to a safe default rather than leaving it pointed
   // at the now-deleted name.
+  if (currentSpriteName === name) currentSpriteName = 'PLAYER_S';
+  if (selectedSlot === name) selectedSlot = null;
+
+  rebuildUI();
+  setStatus('Deleted ' + name);
+}
+
+// Permanently removes a custom weapon from the game entirely — sprite art,
+// sound, held-item anchor position, loot-pool/drop-weight state, and any
+// per-weapon constant overrides. Built-in weapons (WEAPON_PISTOL/WEAPON_KNIFE)
+// are never deletable — only ones added via [ + Add ]/[ Duplicate ] — since
+// every custom weapon (and registerWeapon() itself) treats them as the base
+// fallback shape.
+function deleteWeapon(category, name) {
+  if (!confirm('Permanently delete ' + name + '? This removes its sprite, sounds, and settings entirely. This cannot be undone.')) return;
+
+  // Sprite art (static + all animation variants)
+  localStorage.removeItem('sprite_' + name);
+  localStorage.removeItem('sprite_' + name + '_frames');
+  localStorage.removeItem('sprite_' + name + '_fps');
+  (SPRITE_ANIM_STATES[name] || []).forEach(st => {
+    localStorage.removeItem(animFrKey(name, st));
+    localStorage.removeItem(animFpsKey(name, st));
+  });
+
+  // Sound effects — weapons only ever have an 'attack' sound
+  ['attack'].forEach(kind => {
+    localStorage.removeItem('sound_' + name + '_' + kind);
+    localStorage.removeItem('sound_' + name + '_' + kind + '_vol');
+    localStorage.removeItem('sound_' + name + '_' + kind + '_start');
+    localStorage.removeItem('sound_' + name + '_' + kind + '_hp');
+    localStorage.removeItem('sound_' + name + '_' + kind + '_lp');
+  });
+
+  // Held-item anchor position
+  localStorage.removeItem(ANCHOR_KEY(name));
+  delete ANCHOR_DEFAULTS[name];
+
+  // Loot pool membership + drop weight
+  if (isInLootPool(name)) toggleLootPool(name, false);
+  const weights = loadWeaponDropWeights();
+  delete weights[name];
+  saveWeaponDropWeights(weights);
+
+  // If this weapon is currently equipped, fall back to the category's base
+  // weapon instead of leaving a dangling reference to a deleted name.
+  const baseName = category === 'ranged' ? 'WEAPON_PISTOL' : 'WEAPON_KNIFE';
+  if (getEquipped(category) === name) setEquipped(category, baseName);
+
+  // Per-weapon constant overrides (stat sliders)
+  resetConstants(name);
+
+  // Its own custom-weapon registration
+  const custom = loadCustomWeaponsList();
+  const listKey = category === 'ranged' ? 'ranged' : 'melee';
+  custom[listKey] = (custom[listKey] || []).filter(id => id !== name);
+  saveCustomWeaponsList(custom);
+
+  // In-memory lookup tables — otherwise it'd keep showing up in the UI/publish
+  delete SPRITE_FNS[name];
+  delete SPRITE_TO_CONFIG[name];
+  delete CONSTANT_DEFAULTS[name];
+  delete CONSTANT_SCHEMAS[name];
+  delete SPRITE_ANIM_STATES[name];
+  const groupKey = category === 'ranged' ? 'rangedWeapons' : 'meleeWeapons';
+  const gi = SPRITE_GROUPS[groupKey].indexOf(name);
+  if (gi !== -1) SPRITE_GROUPS[groupKey].splice(gi, 1);
+  const bi = BUILTIN_NAMES.indexOf(name);
+  if (bi !== -1) BUILTIN_NAMES.splice(bi, 1);
+
   if (currentSpriteName === name) currentSpriteName = 'PLAYER_S';
   if (selectedSlot === name) selectedSlot = null;
 
@@ -1482,6 +1554,17 @@ function buildSlotRow(name, container) {
     dupWeaponBtn.className = 'btn'; dupWeaponBtn.textContent = '[ Duplicate ]';
     dupWeaponBtn.onclick = () => duplicateWeapon(cat, name);
     actions.appendChild(dupWeaponBtn);
+
+    // Only weapons added via [ + Add ]/[ Duplicate ] can be deleted — the
+    // built-in pistol/knife are hard-coded fallbacks elsewhere and must
+    // always exist.
+    if ((loadCustomWeaponsList()[cat] || []).includes(name)) {
+      const deleteWeaponBtn = document.createElement('button');
+      deleteWeaponBtn.className = 'btn danger';
+      deleteWeaponBtn.textContent = '[ Delete Weapon ]';
+      deleteWeaponBtn.onclick = () => deleteWeapon(cat, name);
+      actions.appendChild(deleteWeaponBtn);
+    }
   }
 
   // Unlimited ammo toggle — ranged weapons only; melee has no ammo/reload concept
