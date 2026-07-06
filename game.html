@@ -120,7 +120,7 @@ const RESERVE_AMMO_CAP = 200;
 // CONFIG — default values overridden by devtool (mercs_constants in localStorage)
 const _C_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
-  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off' },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0 },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
@@ -1943,9 +1943,13 @@ function spawnBullet() {
 
   // Splash weapons (e.g. a rocket launcher) render as a bigger orange projectile
   // instead of the standard bullet dot, so they visually read as explosive.
+  // Bounce weapons (Max Bounces > 0) render as green — mutually exclusive with
+  // splash, since an AoE explosion already fully resolves on first contact,
+  // leaving nothing left to ricochet (see updateBouncingBullet()).
   const isRocket = EQUIPPED_RANGED.splashRadius > 0;
-  const bulletColor = isRocket ? '#ff7a1a' : '#f0e040';
-  const bulletSize = isRocket ? 6 : 3;
+  const canBounce = !isRocket && EQUIPPED_RANGED.maxBounces > 0;
+  const bulletColor = isRocket ? '#ff7a1a' : canBounce ? '#5cf25c' : '#f0e040';
+  const bulletSize = isRocket ? 6 : canBounce ? 4 : 3;
 
   const spawned = [];
   for (let i = 0; i < EQUIPPED_RANGED.pelletCount; i++) {
@@ -1958,6 +1962,7 @@ function spawnBullet() {
       color: bulletColor,
       size: bulletSize,
     };
+    if (canBounce) b.bouncesLeft = EQUIPPED_RANGED.maxBounces;
     bullets.push(b);
     spawned.push(b);
   }
@@ -1966,7 +1971,7 @@ function spawnBullet() {
   // draw the same trail; each shooter's own client still resolves its own hits.
   if (STATE === 'mpPlaying') {
     Net.send('state', { kind: 'shot', data: {
-      bullets: spawned.map(b => ({ x:b.x, y:b.y, dx:b.dx, dy:b.dy, color:b.color, size:b.size })),
+      bullets: spawned.map(b => ({ x:b.x, y:b.y, dx:b.dx, dy:b.dy, color:b.color, size:b.size, bounces:b.bouncesLeft })),
       range: EQUIPPED_RANGED.bulletRange,
     }});
   }
@@ -2089,9 +2094,78 @@ function explodeSplash(x, y) {
   }
 }
 
+// Bounce-capable bullets (Max Bounces > 0) use a careful axis-separated
+// position update instead of the simple combined move every other bullet
+// uses — this is what lets us tell WHICH axis a wall collision happened on,
+// so we know whether to flip dx or dy (or both, for a corner) rather than
+// just despawning. An enemy hit applies damage exactly like a normal bullet's
+// single-target branch, then reflects the bullet off the enemy's surface
+// (treated as a circular obstacle) instead of consuming it, until its bounce
+// budget runs out — at that point the next contact destroys it like normal.
+// Returns true when the bullet is spent and should be removed.
+function updateBouncingBullet(b, dt) {
+  if (b.hitCooldown > 0) b.hitCooldown -= dt;
+
+  let nx = b.x + b.dx * dt;
+  const wallX = pointInWall(nx, b.y) || nx < 0 || nx > MAP_W;
+  if (wallX) { b.dx = -b.dx; nx = b.x; }
+
+  let ny = b.y + b.dy * dt;
+  const wallY = pointInWall(nx, ny) || ny < 0 || ny > MAP_H;
+  if (wallY) { b.dy = -b.dy; ny = b.y; }
+
+  b.x = nx; b.y = ny;
+  b.distTravelled += Math.sqrt(b.dx*b.dx + b.dy*b.dy) * dt;
+
+  if (wallX || wallY) {
+    if (b.bouncesLeft <= 0) return true; // out of bounces — this contact despawns it like normal
+    b.bouncesLeft--;
+  }
+
+  if (b.distTravelled > EQUIPPED_RANGED.bulletRange) return true;
+
+  for (const e of enemies) {
+    if (e.deathTimer >= 0) continue;
+    // Skip the exact enemy this bullet just bounced off of for a brief grace
+    // period — important for large/boss-sized enemies, where escaping their
+    // hit radius can take several frames; without this a single bounce could
+    // otherwise re-trigger (and re-damage) every frame while still overlapping.
+    if (b.hitCooldown > 0 && e.id === b.lastHitId) continue;
+    const dist = Math.hypot(b.x - e.x, b.y - e.y);
+    if (dist < e.def.size/2 + 3) {
+      if (STATE === 'mpPlaying' && !isHost) {
+        // Optimistic local feedback only — the host resolves the real hp/kill.
+        e.flashTimer = 0.06;
+        SOUNDS.play(e.type, 'damage');
+        Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+      } else {
+        applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+      }
+      if (b.bouncesLeft <= 0) return true; // no bounces left — this hit consumes it like normal
+
+      const invDist = 1 / (dist || 1);
+      const nx2 = (b.x - e.x) * invDist, ny2 = (b.y - e.y) * invDist;
+      const dot = b.dx * nx2 + b.dy * ny2;
+      b.dx -= 2 * dot * nx2;
+      b.dy -= 2 * dot * ny2;
+      b.bouncesLeft--;
+      b.lastHitId = e.id;
+      b.hitCooldown = 0.15;
+      break;
+    }
+  }
+  return false;
+}
+
 function updateBullets(dt) {
   for (let i = bullets.length-1; i >= 0; i--) {
     const b = bullets[i];
+
+    if (b.bouncesLeft !== undefined) {
+      if (updateBouncingBullet(b, dt)) bullets.splice(i, 1);
+      continue;
+    }
+
     b.x += b.dx * dt;
     b.y += b.dy * dt;
     b.distTravelled += Math.sqrt(b.dx*b.dx + b.dy*b.dy) * dt;
@@ -2131,6 +2205,28 @@ function updateBullets(dt) {
 function updateRemoteBullets(dt) {
   for (let i = remoteBullets.length-1; i >= 0; i--) {
     const b = remoteBullets[i];
+
+    // Cosmetic-only wall bounce, mirroring updateBouncingBullet() — no enemy
+    // interaction here (remote bullets never do collision/damage locally;
+    // the shooter's own client already resolved every hit), just enough so
+    // other players see the same ricochet path instead of it vanishing early.
+    if (b.bouncesLeft !== undefined) {
+      let nx = b.x + b.dx * dt;
+      const wallX = pointInWall(nx, b.y) || nx < 0 || nx > MAP_W;
+      if (wallX) { b.dx = -b.dx; nx = b.x; }
+      let ny = b.y + b.dy * dt;
+      const wallY = pointInWall(nx, ny) || ny < 0 || ny > MAP_H;
+      if (wallY) { b.dy = -b.dy; ny = b.y; }
+      b.x = nx; b.y = ny;
+      b.distTravelled += Math.sqrt(b.dx*b.dx + b.dy*b.dy) * dt;
+      if (wallX || wallY) {
+        if (b.bouncesLeft <= 0) { remoteBullets.splice(i, 1); continue; }
+        b.bouncesLeft--;
+      }
+      if (b.distTravelled > b.range) remoteBullets.splice(i, 1);
+      continue;
+    }
+
     b.x += b.dx * dt;
     b.y += b.dy * dt;
     b.distTravelled += Math.sqrt(b.dx*b.dx + b.dy*b.dy) * dt;
@@ -2885,8 +2981,10 @@ Net.on('state', msg => {
     const d = msg.data;
     SOUNDS.play((remotePlayers.get(msg.from) || {}).weaponName || 'WEAPON_PISTOL', 'attack');
     (d.bullets || []).forEach(b => {
-      remoteBullets.push({ x:b.x, y:b.y, dx:b.dx, dy:b.dy, distTravelled:0, range:d.range,
-        color: b.color || '#f0e040', size: b.size || 3 });
+      const rb = { x:b.x, y:b.y, dx:b.dx, dy:b.dy, distTravelled:0, range:d.range,
+        color: b.color || '#f0e040', size: b.size || 3 };
+      if (b.bounces !== undefined) rb.bouncesLeft = b.bounces;
+      remoteBullets.push(rb);
     });
   } else if (msg.kind === 'melee') {
     let rp = remotePlayers.get(msg.from);
