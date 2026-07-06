@@ -441,10 +441,12 @@ const SPRITES = {
 
   load() {
     const names = Object.keys(SPRITE_FNS); // includes PICKUP_HEALTH
-    // Equipped weapon, and any weapon in the loot pool, may be a custom one added
-    // in devtool (not in SPRITE_FNS) — still check for an uploaded sprite so it
-    // renders correctly whether worn or found as a drop.
+    // Equipped weapons, and any weapon in the loot pool, may be a custom one
+    // added in devtool (not in SPRITE_FNS) — still check for an uploaded
+    // sprite so it renders correctly whether worn, found as a drop, or shown
+    // in the HUD's equipped-weapons slot.
     if (!names.includes(EQUIPPED_RANGED.name)) names.push(EQUIPPED_RANGED.name);
+    if (!names.includes(EQUIPPED_MELEE.name)) names.push(EQUIPPED_MELEE.name);
     lootPoolEntries().forEach(entry => { if (!names.includes(entry.name)) names.push(entry.name); });
     Object.keys(ENEMY_DEFS).forEach(name => { if (!names.includes(name)) names.push(name); });
     names.forEach(name => {
@@ -2295,6 +2297,40 @@ function drawFlashes(ctx) {
 
 // === HUD ===
 
+// Shared by drawHUD (single-player) and drawMpHUD — a compact panel just
+// below the HP/ammo panel showing both currently-equipped weapons (icon +
+// name), since either can change mid-run via a weapon pickup (see the
+// p.kind === 'weapon' collection branch) with no other visual confirmation
+// of what's actually equipped afterward.
+function drawEquippedWeaponsPanel(ctx) {
+  const x = 8, y = 72, w = 160, h = 46;
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#3a384e'; ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#5a5870'; ctx.font = '11px VT323, monospace';
+  ctx.fillText('LOADOUT', x + 6, y + 12);
+
+  const slotW = w / 2;
+  [
+    { weapon: EQUIPPED_RANGED, fallback: 'WEAPON_PISTOL' },
+    { weapon: EQUIPPED_MELEE,  fallback: 'WEAPON_KNIFE'  },
+  ].forEach((slot, i) => {
+    const cx = x + slotW * i;
+    const iconW = 32, iconH = 16;
+    ctx.save();
+    ctx.translate(cx + slotW/2 - iconW/2, y + 16);
+    drawWeaponIcon(ctx, slot.weapon.name, iconW, iconH, slot.fallback);
+    ctx.restore();
+
+    const label = slot.weapon.name.replace('WEAPON_', '').replace(/_/g, ' ');
+    ctx.fillStyle = '#c8c6e0'; ctx.font = '11px VT323, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, cx + slotW/2, y + 42);
+    ctx.textAlign = 'left';
+  });
+}
+
 // Shared by drawHUD (single-player) and drawMpHUD (multiplayer's shared team
 // combo) — same flash-and-scale text at center bottom either way.
 function drawComboMilestone(ctx) {
@@ -2362,6 +2398,8 @@ function drawHUD(ctx) {
     ctx.fillStyle = '#f0c840'; ctx.font='13px VT323, monospace';
     ctx.fillText('AMMO  ' + player.mag + ' / ' + player.reserve, 14, 60);
   }
+
+  drawEquippedWeaponsPanel(ctx);
 
   // Top right: score + combo
   ctx.fillStyle = `rgba(0,0,0,${panelAlpha})`;
@@ -2445,6 +2483,8 @@ function drawMpHUD(ctx) {
     ctx.fillStyle = '#f0c840'; ctx.font='13px VT323, monospace';
     ctx.fillText('AMMO  ' + player.mag + ' / ' + player.reserve, 14, 60);
   }
+
+  drawEquippedWeaponsPanel(ctx);
 
   // Top right: live scoreboard (host-authoritative, broadcast to everyone)
   const entries = Object.entries(playerScores).sort((a, b) => b[1].score - a[1].score).slice(0, 4);
