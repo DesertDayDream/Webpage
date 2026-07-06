@@ -120,7 +120,7 @@ const RESERVE_AMMO_CAP = 200;
 // CONFIG — default values overridden by devtool (mercs_constants in localStorage)
 const _C_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
-  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off' },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off' },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
@@ -819,6 +819,7 @@ let pickups  = [];
 let particles= [];
 let flashes  = []; // { text, x, y, color, timer, maxTimer }
 let shockwaves = []; // { x, y, maxRadius, timer, duration } — expanding ring showing an explosion's actual blast radius
+let beams = []; // { x1, y1, x2, y2, color, timer, duration } — instant hitscan trace line (no travelling bullet to see otherwise)
 
 // Per-type respawn gating for spawnEnemy() — Respawn Delay / Do Not Respawn sliders
 // in devtool.html. Keyed by enemy type name, only ever read/written authoritatively
@@ -1929,6 +1930,17 @@ function spawnBullet() {
   const originX = player.x + anchor.x + Math.cos(aimAngle) * GUN_LENGTH;
   const originY = player.y + anchor.y + Math.sin(aimAngle) * GUN_LENGTH;
   const spreadRad = EQUIPPED_RANGED.spreadAngle * Math.PI / 180;
+
+  // Hitscan weapons (e.g. a rail gun) resolve every pellet instantly along its
+  // aim line instead of spawning a travelling projectile — see fireHitscan().
+  if (EQUIPPED_RANGED.hitscan === 'on') {
+    for (let i = 0; i < EQUIPPED_RANGED.pelletCount; i++) {
+      const angle = spreadRad > 0 ? aimAngle + (Math.random() - 0.5) * spreadRad : aimAngle;
+      fireHitscan(originX, originY, angle);
+    }
+    return;
+  }
+
   // Splash weapons (e.g. a rocket launcher) render as a bigger orange projectile
   // instead of the standard bullet dot, so they visually read as explosive.
   const isRocket = EQUIPPED_RANGED.splashRadius > 0;
@@ -1957,6 +1969,49 @@ function spawnBullet() {
       bullets: spawned.map(b => ({ x:b.x, y:b.y, dx:b.dx, dy:b.dy, color:b.color, size:b.size })),
       range: EQUIPPED_RANGED.bulletRange,
     }});
+  }
+}
+
+// Resolves one hitscan pellet instantly: samples points along the aim ray
+// (same coarse step-and-check approach travelling bullets already use each
+// frame, just walked all at once instead of over time) until it exceeds
+// bulletRange, leaves the map, hits a wall, or overlaps an enemy — whichever
+// comes first. Reuses pointInWall() and the exact same enemy-overlap test
+// updateBullets() uses, so a hitscan weapon behaves identically to a very
+// fast bullet, just without the travel time.
+function fireHitscan(originX, originY, angle) {
+  const range = EQUIPPED_RANGED.bulletRange;
+  const step = 8;
+  const dx = Math.cos(angle), dy = Math.sin(angle);
+  let x = originX, y = originY, travelled = 0, hitEnemy = null;
+
+  while (travelled < range) {
+    x += dx * step; y += dy * step; travelled += step;
+    if (x < 0 || x > MAP_W || y < 0 || y > MAP_H || pointInWall(x, y)) break;
+    hitEnemy = enemies.find(e => e.deathTimer < 0 && Math.hypot(x - e.x, y - e.y) < e.def.size/2 + 3);
+    if (hitEnemy) break;
+  }
+
+  if (hitEnemy) {
+    if (EQUIPPED_RANGED.splashRadius > 0) {
+      explodeSplash(x, y);
+    } else if (STATE === 'mpPlaying' && !isHost) {
+      // Optimistic local feedback only — the host resolves the real hp/kill.
+      hitEnemy.flashTimer = 0.06;
+      SOUNDS.play(hitEnemy.type, 'damage');
+      Net.send('hit', { enemyId: hitEnemy.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+    } else {
+      applyDamageToEnemy(hitEnemy, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+    }
+  } else if (EQUIPPED_RANGED.splashRadius > 0) {
+    explodeSplash(x, y); // missed every enemy but still detonates at the wall/range endpoint
+  }
+
+  // Instant beam trace — the only visual feedback, since there's no travelling
+  // bullet to see (the hit already happened the same frame it was fired).
+  beams.push({ x1: originX, y1: originY, x2: x, y2: y, color: '#7fe8ff', timer: 0, duration: 0.08 });
+  if (STATE === 'mpPlaying') {
+    Net.send('state', { kind: 'beam', data: { x1: originX, y1: originY, x2: x, y2: y } });
   }
 }
 
@@ -2262,6 +2317,31 @@ function drawShockwaves(ctx) {
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.arc(s.x, s.y, radius, 0, Math.PI*2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// A hitscan shot's only visual — a straight trace line from muzzle to impact
+// point that fades almost immediately, since the hit itself is resolved the
+// same frame it's fired (see fireHitscan()).
+function updateBeams(dt) {
+  for (let i = beams.length-1; i >= 0; i--) {
+    const b = beams[i];
+    b.timer += dt;
+    if (b.timer >= b.duration) beams.splice(i, 1);
+  }
+}
+
+function drawBeams(ctx) {
+  for (const b of beams) {
+    const progress = b.timer / b.duration;
+    ctx.globalAlpha = Math.max(0, 1 - progress);
+    ctx.strokeStyle = b.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(b.x1, b.y1);
+    ctx.lineTo(b.x2, b.y2);
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
@@ -2843,6 +2923,12 @@ Net.on('state', msg => {
       });
     }
     spawnShockwave(msg.data.x, msg.data.y, msg.data.radius || 0);
+  } else if (msg.kind === 'beam') {
+    // Cosmetic-only sync (see fireHitscan()) — damage was already resolved by
+    // the shooter's own client via applyDamageToEnemy/'hit'/explodeSplash;
+    // this just draws the same instant trace line for everyone else.
+    const d = msg.data;
+    beams.push({ x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2, color: '#7fe8ff', timer: 0, duration: 0.08 });
   }
 });
 
@@ -3589,7 +3675,7 @@ function resetPlayerForMatch() {
   player.reloading = false; player.reloadTimer = 0;
   player.rawAngle = 0; player.facing = 'S'; player.meleeCd = 0; player.fireCd = 0;
   player.flashTimer = 0; player.invincible = 0;
-  enemies = []; bullets = []; remoteBullets = []; pickups = []; particles = []; flashes = []; shockwaves = [];
+  enemies = []; bullets = []; remoteBullets = []; pickups = []; particles = []; flashes = []; shockwaves = []; beams = [];
   mainTimer = 150; elapsed = 0;
   spawnTimer = 0; spawnRate = 3.0;
   enemyLastDeathTime = {}; enemyNeverRespawn = new Set();
@@ -3629,6 +3715,7 @@ function loop(now) {
     updateParticles(dt);
     updateFlashes(dt);
     updateShockwaves(dt);
+    updateBeams(dt);
     if (mpActive) {
       updateRemotePlayers(dt);
       updateRemoteBullets(dt);
@@ -3649,6 +3736,7 @@ function loop(now) {
     drawPlayer(ctx);
     drawParticles(ctx);
     drawShockwaves(ctx);
+    drawBeams(ctx);
     drawFlashes(ctx);
   }
   ctx.restore();
