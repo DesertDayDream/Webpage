@@ -564,7 +564,7 @@ const CONSTANT_DEFAULTS = {
   PICKUP_AMMO:   { dropChance:28, amountMin:5,  amountMax:10 },
   PICKUP_HEALTH: { dropChance:14, healMin:20,   healMax:40   },
   PICKUP_WEAPON: { dropChance:8 },
-  PICKUP_ARMOR:  { dropChance:10, hits:3 },
+  PICKUP_ARMOR:  { dropChance:10, hits:3, stackable:'on' },
   PICKUP_SPEED:  { dropChance:10, duration:8, multiplier:1.5 },
 };
 
@@ -647,6 +647,7 @@ const CONSTANT_SCHEMAS = {
   PICKUP_ARMOR: [
     { key:'dropChance', label:'Drop Chance', min:0,  max:100, step:1, unit:'%'  },
     { key:'hits',       label:'Hits',        min:1,  max:20,  step:1, unit:''   },
+    { key:'stackable',  label:'Stackable',   type:'select', options:['on','off'] },
   ],
   PICKUP_SPEED: [
     { key:'dropChance', label:'Drop Chance', min:0,  max:100, step:1,   unit:'%' },

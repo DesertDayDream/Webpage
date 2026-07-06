@@ -128,7 +128,7 @@ const _C_DEFAULTS = {
   PICKUP_AMMO:   { dropChance:28, amountMin:5,  amountMax:10 },
   PICKUP_HEALTH: { dropChance:14, healMin:20,   healMax:40   },
   PICKUP_WEAPON: { dropChance:8 },
-  PICKUP_ARMOR:  { dropChance:10, hits:3 },
+  PICKUP_ARMOR:  { dropChance:10, hits:3, stackable:'on' },
   PICKUP_SPEED:  { dropChance:10, duration:8, multiplier:1.5 },
 };
 const CONFIG = (function() {
@@ -2396,8 +2396,17 @@ function updatePickups(dt) {
         }
         spawnFlash('EQUIPPED ' + p.weaponName.replace('WEAPON_','').replace(/_/g,' '), p.x, p.y - 10, '#3ef83e');
       } else if (p.kind === 'armor') {
-        player.armor += CONFIG.PICKUP_ARMOR.hits;
-        spawnFlash('+' + CONFIG.PICKUP_ARMOR.hits + ' ARMOR', p.x, p.y - 10, '#40c8f0');
+        const hits = CONFIG.PICKUP_ARMOR.hits;
+        if (CONFIG.PICKUP_ARMOR.stackable === 'off') {
+          // Non-stacking: each pickup sets the charge count rather than
+          // adding to it — same "refresh, don't accumulate" idea Speed
+          // Boost's duration already uses.
+          player.armor = hits;
+          spawnFlash('ARMOR x' + hits, p.x, p.y - 10, '#40c8f0');
+        } else {
+          player.armor += hits;
+          spawnFlash('+' + hits + ' ARMOR', p.x, p.y - 10, '#40c8f0');
+        }
       } else if (p.kind === 'speed') {
         // Refreshes to the full duration rather than stacking — a buff timer,
         // not an accumulating resource like ammo/hp.
