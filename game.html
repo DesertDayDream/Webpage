@@ -816,6 +816,7 @@ let bullets  = [];
 let pickups  = [];
 let particles= [];
 let flashes  = []; // { text, x, y, color, timer, maxTimer }
+let shockwaves = []; // { x, y, maxRadius, timer, duration } — expanding ring showing an explosion's actual blast radius
 
 // Per-type respawn gating for spawnEnemy() — Respawn Delay / Do Not Respawn sliders
 // in devtool.html. Keyed by enemy type name, only ever read/written authoritatively
@@ -2021,12 +2022,13 @@ function explodeSplash(x, y) {
       size: 3 + Math.random() * 5,
     });
   }
+  spawnShockwave(x, y, radius); // the actual blast-radius ring, unlike the burst above
 
   // Cosmetic-only sync to other clients — mirrors the 'melee' kind exactly:
   // damage for remote clients' own local enemy copies is already resolved by
   // the discrete 'hit' messages above; this just draws the burst.
   if (STATE === 'mpPlaying') {
-    Net.send('state', { kind: 'explosion', data: { x, y } });
+    Net.send('state', { kind: 'explosion', data: { x, y, radius } });
   }
 }
 
@@ -2227,6 +2229,38 @@ function drawParticles(ctx) {
     ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
     ctx.fillStyle = p.color;
     ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// An expanding, fading ring showing an explosion's ACTUAL blast radius (unlike
+// the particle burst above, which is stylistic and doesn't scale with
+// splashRadius) — spawned by explodeSplash() locally and by the 'explosion'
+// state handler for remote players' rockets, so every viewer sees the true
+// hit area regardless of how big Splash Radius is configured.
+function spawnShockwave(x, y, radius) {
+  if (radius <= 0) return;
+  shockwaves.push({ x, y, maxRadius: radius, timer: 0, duration: 0.35 });
+}
+
+function updateShockwaves(dt) {
+  for (let i = shockwaves.length-1; i >= 0; i--) {
+    const s = shockwaves[i];
+    s.timer += dt;
+    if (s.timer >= s.duration) shockwaves.splice(i, 1);
+  }
+}
+
+function drawShockwaves(ctx) {
+  for (const s of shockwaves) {
+    const progress = s.timer / s.duration;
+    const radius = s.maxRadius * (1 - Math.pow(1 - progress, 2)); // ease-out: fast expand, settle at the true radius
+    ctx.globalAlpha = Math.max(0, 1 - progress) * 0.8;
+    ctx.strokeStyle = '#ff8c1a';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, radius, 0, Math.PI*2);
+    ctx.stroke();
   }
   ctx.globalAlpha = 1;
 }
@@ -2768,6 +2802,7 @@ Net.on('state', msg => {
         size: 3 + Math.random() * 5,
       });
     }
+    spawnShockwave(msg.data.x, msg.data.y, msg.data.radius || 0);
   }
 });
 
@@ -3514,7 +3549,7 @@ function resetPlayerForMatch() {
   player.reloading = false; player.reloadTimer = 0;
   player.rawAngle = 0; player.facing = 'S'; player.meleeCd = 0; player.fireCd = 0;
   player.flashTimer = 0; player.invincible = 0;
-  enemies = []; bullets = []; remoteBullets = []; pickups = []; particles = []; flashes = [];
+  enemies = []; bullets = []; remoteBullets = []; pickups = []; particles = []; flashes = []; shockwaves = [];
   mainTimer = 150; elapsed = 0;
   spawnTimer = 0; spawnRate = 3.0;
   enemyLastDeathTime = {}; enemyNeverRespawn = new Set();
@@ -3553,6 +3588,7 @@ function loop(now) {
     updatePickups(dt);
     updateParticles(dt);
     updateFlashes(dt);
+    updateShockwaves(dt);
     if (mpActive) {
       updateRemotePlayers(dt);
       updateRemoteBullets(dt);
@@ -3572,6 +3608,7 @@ function loop(now) {
     if (mpActive) drawRemotePlayers(ctx);
     drawPlayer(ctx);
     drawParticles(ctx);
+    drawShockwaves(ctx);
     drawFlashes(ctx);
   }
   ctx.restore();
