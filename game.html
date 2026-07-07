@@ -3378,13 +3378,14 @@ function drawMpLoadoutScreen(ctx, opts) {
     uiButton(ctx, x, arrowY, arrowSize, arrowSize, '<', () => step(-1));
     uiButton(ctx, x + colW - arrowSize, arrowY, arrowSize, arrowSize, '>', () => step(1));
 
+    const textCenterX = x + colW/2 - 12;
     ctx.fillStyle = '#3ef83e';
     ctx.font = '22px VT323, monospace';
-    ctx.fillText(entries[idx].name.replace('WEAPON_','').replace(/_/g,' '), x + colW/2, arrowY + 27);
+    ctx.fillText(entries[idx].name.replace('WEAPON_','').replace(/_/g,' '), textCenterX, arrowY + 27);
 
     ctx.fillStyle = '#5a5870';
     ctx.font = '14px VT323, monospace';
-    ctx.fillText((idx+1) + ' / ' + entries.length, x + colW/2, arrowY + arrowSize + 24);
+    ctx.fillText((idx+1) + ' / ' + entries.length, textCenterX, arrowY + arrowSize + 24);
   }
 
   drawCarousel(colX1, 'RANGED', ranged, 'ranged', EQUIPPED_RANGED.name);
@@ -3919,23 +3920,22 @@ function drawStartScreen(ctx) {
   }
 
   const bw = 240, bh = 46, bx = CW/2 - bw/2, gap = 14;
-  let by = CH/2 - 40;
+  let by = CH/2 - 60;
   uiButton(ctx, bx, by, bw, bh, '[ START ]', () => startGame());
   by += bh + gap;
   uiButton(ctx, bx, by, bw, bh, '[ MULTIPLAYER ]', () => enterMultiplayer());
   by += bh + gap;
+  uiButton(ctx, bx, by, bw, bh, '[ LEADERBOARD ]', () => {
+    justSavedIndex = -1;
+    STATE = 'leaderboard';
+    leaderboardEntries = [];
+    leaderboardLoading = true;
+    loadLeaderboard(LB_BOARD_SP).then(entries => { leaderboardEntries = entries; leaderboardLoading = false; });
+  });
+  by += bh + gap;
   uiButton(ctx, bx, by, bw, bh, '[ SETTINGS ]', () => { STATE = 'settings'; });
   by += bh + gap;
   uiButton(ctx, bx, by, bw, bh, '[ CONTROLS ]', () => { STATE = 'controls'; });
-
-  ctx.fillStyle = '#5a5870';
-  ctx.font = '13px VT323, monospace';
-  ctx.fillText('ENTER — QUICK START     L — LEADERBOARD', CW/2, by + bh + 28);
-
-  ctx.fillStyle = '#8a88a0';
-  ctx.font = '13px VT323, monospace';
-  ctx.fillText('WASD / ARROWS — move    MOUSE — aim', CW/2, by + bh + 52);
-  ctx.fillText('LEFT CLICK / SPACE — shoot    RIGHT CLICK / F — melee    R — reload', CW/2, by + bh + 72);
   ctx.textAlign = 'left';
 }
 
