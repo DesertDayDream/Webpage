@@ -3344,34 +3344,51 @@ function drawMpLoadoutScreen(ctx, opts) {
   const ranged = pool.filter(e => e.category === 'ranged');
   const melee  = pool.filter(e => e.category === 'melee');
 
-  const colW = 260, colGap = 40;
+  const colW = 300, colGap = 40;
   const colX1 = CW/2 - colGap/2 - colW;
   const colX2 = CW/2 + colGap/2;
-  const topY = 110;
+  const topY = 130;
 
-  function drawColumn(x, label, entries, current) {
+  // Fixed-height carousel (one weapon shown at a time, cycled with </>)
+  // instead of a scrolling button list — a loot pool with many entries would
+  // otherwise overflow the screen vertically. Browsing IS equipping (moving
+  // to a new entry calls selectLoadoutWeapon immediately), so the displayed
+  // entry always matches EQUIPPED_RANGED/EQUIPPED_MELEE — no separate
+  // "current selection" state to track or desync.
+  function drawCarousel(x, label, entries, category, currentName) {
     ctx.fillStyle = '#8a88a0';
     ctx.font = '18px VT323, monospace';
     ctx.fillText(label, x + colW/2, topY);
-    let y = topY + 30;
+
     if (entries.length === 0) {
       ctx.fillStyle = '#5a5870';
       ctx.font = '14px VT323, monospace';
-      ctx.fillText('(none in loot pool)', x + colW/2, y);
+      ctx.fillText('(none in loot pool)', x + colW/2, topY + 50);
       return;
     }
-    entries.forEach(e => {
-      const isCurrent = e.name === current;
-      uiButton(ctx, x, y, colW, 40,
-        e.name.replace('WEAPON_','').replace(/_/g,' ') + (isCurrent ? '  [EQUIPPED]' : ''),
-        () => selectLoadoutWeapon(e.category, e.name),
-        { font: '15px VT323, monospace' });
-      y += 48;
-    });
+
+    let idx = entries.findIndex(e => e.name === currentName);
+    if (idx === -1) idx = 0;
+
+    const arrowY = topY + 46, arrowSize = 40;
+    const step = dir => {
+      const next = (idx + dir + entries.length) % entries.length;
+      selectLoadoutWeapon(category, entries[next].name);
+    };
+    uiButton(ctx, x, arrowY, arrowSize, arrowSize, '<', () => step(-1));
+    uiButton(ctx, x + colW - arrowSize, arrowY, arrowSize, arrowSize, '>', () => step(1));
+
+    ctx.fillStyle = '#3ef83e';
+    ctx.font = '22px VT323, monospace';
+    ctx.fillText(entries[idx].name.replace('WEAPON_','').replace(/_/g,' '), x + colW/2, arrowY + 27);
+
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '14px VT323, monospace';
+    ctx.fillText((idx+1) + ' / ' + entries.length, x + colW/2, arrowY + arrowSize + 24);
   }
 
-  drawColumn(colX1, 'RANGED', ranged, EQUIPPED_RANGED.name);
-  drawColumn(colX2, 'MELEE', melee, EQUIPPED_MELEE.name);
+  drawCarousel(colX1, 'RANGED', ranged, 'ranged', EQUIPPED_RANGED.name);
+  drawCarousel(colX2, 'MELEE', melee, 'melee', EQUIPPED_MELEE.name);
 
   const bw = 220, bh = 46, bx = CW/2 - bw/2, by = CH - 80;
   if (closable) {
