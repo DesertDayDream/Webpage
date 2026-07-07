@@ -294,6 +294,7 @@ function lobbySummary(lobby) {
     playerCount: lobby.players.size,
     maxPlayers: MAX_PLAYERS,
     state: lobby.state,
+    mode: lobby.mode,
   };
 }
 
@@ -304,6 +305,7 @@ function lobbyFull(lobby) {
     hostId: lobby.hostId,
     state: lobby.state,
     maxPlayers: MAX_PLAYERS,
+    mode: lobby.mode,
     players: Array.from(lobby.players.values()).map(function(p) { return { id: p.id, name: p.name }; }),
   };
 }
@@ -405,6 +407,7 @@ wss.on('connection', function(ws) {
         name: String(msg.name || (info.name + "'s Lobby")).slice(0, 30) || (info.name + "'s Lobby"),
         hostId: info.id,
         state: 'waiting',
+        mode: msg.mode === 'ffa' ? 'ffa' : 'coop',
         players: new Map(),
       };
       lobby.players.set(info.id, { id: info.id, name: info.name, ws: ws });
@@ -435,7 +438,7 @@ wss.on('connection', function(ws) {
       if (lobby.hostId !== info.id) return send(ws, 'error', { code: 'not_host', message: 'Only the host can start the match' });
       lobby.state = 'playing';
       var full = lobbyFull(lobby);
-      lobby.players.forEach(function(p) { send(p.ws, 'started', { players: full.players, hostId: full.hostId }); });
+      lobby.players.forEach(function(p) { send(p.ws, 'started', { players: full.players, hostId: full.hostId, mode: full.mode }); });
       broadcastLobbies();
       return;
     }
@@ -478,13 +481,29 @@ wss.on('connection', function(ws) {
       return;
     }
 
-    if (msg.type === 'hit' || msg.type === 'claim') {
+    if (msg.type === 'hit' || msg.type === 'claim' || msg.type === 'eliminated') {
       var host = lobby.players.get(lobby.hostId);
-      if (!host || host.id === info.id) return; // host applies its own hits locally, no round trip needed
+      if (!host || host.id === info.id) return; // host applies its own hits/eliminations locally, no round trip needed
       var payload = { from: info.id };
       if (msg.type === 'hit') { payload.enemyId = msg.enemyId; payload.dmg = msg.dmg; payload.isMelee = !!msg.isMelee; }
-      else { payload.pickupId = msg.pickupId; }
+      else if (msg.type === 'claim') { payload.pickupId = msg.pickupId; }
+      else { payload.killerId = msg.killerId; }
       send(host.ws, msg.type, payload);
+      return;
+    }
+
+    // FFA player-vs-player damage/rewards — routed to one specific OTHER
+    // player by client-supplied id (unlike 'state's broadcast-to-all-others
+    // or 'hit'/'claim's fixed route-to-host above), since a remote player's
+    // hp is owned by their own client, not the host.
+    if (msg.type === 'hitPlayer' || msg.type === 'killstreakReward') {
+      var target = lobby.players.get(msg.targetId);
+      if (!target || target.id === info.id) return; // never let a client target itself via a spoofed message
+      if (msg.type === 'hitPlayer') {
+        send(target.ws, 'hitPlayer', { from: info.id, dmg: msg.dmg, isMelee: !!msg.isMelee });
+      } else {
+        send(target.ws, 'killstreakReward', { kind: msg.kind, amount: msg.amount });
+      }
       return;
     }
   });

@@ -293,6 +293,23 @@ function loadMapConfig() {
 
 const MAP_CONFIG = loadMapConfig();
 const MAP_W = MAP_CONFIG.width, MAP_H = MAP_CONFIG.height;
+
+// Fixed quadrant spawn points for FFA — indexed by join order (each player's
+// position within msg.players, the same server-authoritative array on every
+// client), not anything map-editor-configured. Falls back to the shared
+// coop spawn point for an out-of-range index (shouldn't happen since
+// MAX_PLAYERS on the server is 4, matching these 4 corners exactly).
+const FFA_SPAWN_MARGIN = 80;
+function ffaSpawnPoint(index) {
+  const pts = [
+    { x: FFA_SPAWN_MARGIN, y: FFA_SPAWN_MARGIN },
+    { x: MAP_W - FFA_SPAWN_MARGIN, y: FFA_SPAWN_MARGIN },
+    { x: FFA_SPAWN_MARGIN, y: MAP_H - FFA_SPAWN_MARGIN },
+    { x: MAP_W - FFA_SPAWN_MARGIN, y: MAP_H - FFA_SPAWN_MARGIN },
+  ];
+  return pts[index] || MAP_CONFIG.playerStart;
+}
+
 const WALLS = [...borderWalls(MAP_W, MAP_H), ...MAP_CONFIG.walls];
 const ROADS = MAP_CONFIG.roads || [];
 const PALM_REMOVALS = MAP_CONFIG.palmRemovals || [];
@@ -974,8 +991,15 @@ window.addEventListener('keydown', e => {
   if (e.key === ' ') { e.preventDefault(); shootQueued = true; }
   if (e.key.toLowerCase() === 'f') meleeQueued = true;
   if (e.key.toLowerCase() === 'r') reloadQueued = true;
+  if (e.key.toLowerCase() === 'b' && STATE === 'mpPlaying' && mpMode === 'ffa' && !mpDowned) {
+    mpLoadoutOverlayOpen = !mpLoadoutOverlayOpen;
+  }
+  if (e.key === 'Tab' && STATE === 'mpPlaying') { e.preventDefault(); mpScoreboardHeld = true; }
 });
-window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+window.addEventListener('keyup', e => {
+  keys.delete(e.key.toLowerCase());
+  if (e.key === 'Tab') mpScoreboardHeld = false;
+});
 
 const canvas = document.getElementById('game-canvas');
 canvas.addEventListener('mousemove', e => {
@@ -1027,8 +1051,8 @@ function pointInWall(px, py) {
 // === GAME STATE ===
 
 // 'start' | 'playing' | 'dead' | 'enterInitials' | 'leaderboard' | 'settings' |
-// 'mpConnect' | 'mpName' | 'mpBrowse' | 'mpLobby' | 'mpPlaying' | 'mpEnded' |
-// 'mpEnterInitials' | 'mpLeaderboard'
+// 'controls' | 'mpConnect' | 'mpName' | 'mpBrowse' | 'mpLobby' | 'mpLoadout' |
+// 'mpPlaying' | 'mpEnded' | 'mpEnterInitials' | 'mpLeaderboard'
 let STATE = 'start';
 
 const player = {
@@ -1573,6 +1597,14 @@ function updatePlayer(dt) {
     return;
   }
 
+  if (player.speedBoostTimer > 0) player.speedBoostTimer = Math.max(0, player.speedBoostTimer - dt);
+
+  // FFA loadout-switch overlay ('b') captures input without pausing the world —
+  // buff/invincibility timers below still tick, but movement/aim/shoot/melee don't.
+  if (mpLoadoutOverlayOpen) {
+    shootQueued = false;
+    meleeQueued = false;
+  } else {
   // Aim angle (world-space)
   player.rawAngle = Math.atan2(mouse.worldY - player.y, mouse.worldX - player.x);
   player.facing   = getFacingDir(player.rawAngle);
@@ -1585,7 +1617,6 @@ function updatePlayer(dt) {
   if (keys.has('d') || keys.has('arrowright')) dx += 1;
   if (dx && dy) { dx *= 0.707; dy *= 0.707; }
 
-  if (player.speedBoostTimer > 0) player.speedBoostTimer = Math.max(0, player.speedBoostTimer - dt);
   const speedMult = player.speedBoostTimer > 0 ? CONFIG.PICKUP_SPEED.multiplier : 1;
 
   const nx = player.x + dx * CONFIG.PLAYER.speed * speedMult * dt;
@@ -1640,6 +1671,7 @@ function updatePlayer(dt) {
   if (meleeQueued) {
     meleeQueued = false;
     if (player.meleeCd <= 0) doMelee();
+  }
   }
 
   // Timers
@@ -1978,6 +2010,31 @@ function damagePlayer(dmg) {
   }
 }
 
+// FFA counterpart to damagePlayer() — same armor/flash/invincibility rules,
+// but on death it credits the elimination (attackerId) instead of just
+// freezing/respawning, since FFA tracks kills/deaths/streaks. Called both
+// from the 'hitPlayer' network handler (an opponent's hit) and from splash
+// self-damage (attackerId === Net.playerId, a self-elimination).
+function damagePlayerFFA(dmg, attackerId) {
+  player.flashTimer = 0.15;
+  player.invincible = 0.5;
+  if (player.armor > 0) {
+    player.armor--;
+    spawnFlash('ARMOR -1', player.x, player.y - 20, '#40c8f0');
+    SOUNDS.play('PLAYER', 'damage');
+    return;
+  }
+  player.hp -= dmg;
+  SOUNDS.play('PLAYER', 'damage');
+  if (player.hp <= 0) {
+    player.hp = 0;
+    SOUNDS.play('PLAYER', 'death');
+    goDowned();
+    if (isHost) applyEliminationLocally(attackerId, Net.playerId);
+    else Net.send('eliminated', { killerId: attackerId });
+  }
+}
+
 function updateEnemies(dt) {
   for (let i = enemies.length-1; i >= 0; i--) {
     const e = enemies[i];
@@ -2246,13 +2303,20 @@ function fireHitscan(originX, originY, angle) {
   const range = EQUIPPED_RANGED.bulletRange;
   const step = 8;
   const dx = Math.cos(angle), dy = Math.sin(angle);
-  let x = originX, y = originY, travelled = 0, hitEnemy = null;
+  let x = originX, y = originY, travelled = 0, hitEnemy = null, hitPlayerId = null;
 
   while (travelled < range) {
     x += dx * step; y += dy * step; travelled += step;
     if (x < 0 || x > MAP_W || y < 0 || y > MAP_H || pointInWall(x, y)) break;
     hitEnemy = enemies.find(e => e.deathTimer < 0 && Math.hypot(x - e.x, y - e.y) < e.def.size/2 + 3);
     if (hitEnemy) break;
+    if (mpMode === 'ffa') {
+      for (const [id, rp] of remotePlayers) {
+        if (rp.x === undefined || rp.hp <= 0) continue;
+        if (Math.hypot(x - rp.x, y - rp.y) < PLAYER_SIZE/2 + 3) { hitPlayerId = id; break; }
+      }
+      if (hitPlayerId) break;
+    }
   }
 
   if (hitEnemy) {
@@ -2266,8 +2330,14 @@ function fireHitscan(originX, originY, angle) {
     } else {
       applyDamageToEnemy(hitEnemy, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
     }
+  } else if (hitPlayerId) {
+    if (EQUIPPED_RANGED.splashRadius > 0) {
+      explodeSplash(x, y);
+    } else {
+      Net.send('hitPlayer', { targetId: hitPlayerId, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+    }
   } else if (EQUIPPED_RANGED.splashRadius > 0) {
-    explodeSplash(x, y); // missed every enemy but still detonates at the wall/range endpoint
+    explodeSplash(x, y); // missed every enemy/player but still detonates at the wall/range endpoint
   }
 
   // Instant beam trace — the only visual feedback, since there's no travelling
@@ -2306,6 +2376,20 @@ function explodeSplash(x, y) {
     }
   }
 
+  // FFA: same falloff, against other players instead of enemies. Never
+  // mutates rp.hp directly (write-only from network state) — just tells the
+  // target's own client to apply it, same as every other PVP hit below.
+  if (mpMode === 'ffa') {
+    for (const [id, rp] of remotePlayers) {
+      if (rp.x === undefined || rp.hp <= 0) continue;
+      const dist = Math.hypot(rp.x - x, rp.y - y);
+      if (dist >= radius) continue;
+      const dmg = Math.round(EQUIPPED_RANGED.bulletDmg * (1 - dist / radius));
+      if (dmg <= 0) continue;
+      Net.send('hitPlayer', { targetId: id, dmg, isMelee: false });
+    }
+  }
+
   // Self-damage — shooter only (never teammates/other players), per-weapon
   // opt-in, purely local: no network message needed, exactly like the
   // contact-damage idiom in updateEnemies (every client checks its own local
@@ -2315,7 +2399,10 @@ function explodeSplash(x, y) {
     const pdist = Math.hypot(player.x - x, player.y - y);
     if (pdist < radius) {
       const dmg = Math.round(EQUIPPED_RANGED.bulletDmg * (1 - pdist / radius));
-      if (dmg > 0) damagePlayer(dmg);
+      if (dmg > 0) {
+        if (mpMode === 'ffa') damagePlayerFFA(dmg, Net.playerId);
+        else damagePlayer(dmg);
+      }
     }
   }
 
@@ -2399,7 +2486,29 @@ function updateBouncingBullet(b, dt) {
       b.bouncesLeft--;
       b.lastHitId = e.id;
       b.hitCooldown = 0.15;
-      break;
+      return false; // one target per tick — an enemy hit takes priority over the FFA loop below
+    }
+  }
+
+  if (mpMode === 'ffa') {
+    for (const [id, rp] of remotePlayers) {
+      if (rp.x === undefined || rp.hp <= 0) continue;
+      if (b.hitCooldown > 0 && id === b.lastHitId) continue;
+      const dist = Math.hypot(b.x - rp.x, b.y - rp.y);
+      if (dist < PLAYER_SIZE/2 + 3) {
+        Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+        if (b.bouncesLeft <= 0) return true;
+
+        const invDist = 1 / (dist || 1);
+        const nx2 = (b.x - rp.x) * invDist, ny2 = (b.y - rp.y) * invDist;
+        const dot = b.dx * nx2 + b.dy * ny2;
+        b.dx -= 2 * dot * nx2;
+        b.dy -= 2 * dot * ny2;
+        b.bouncesLeft--;
+        b.lastHitId = id;
+        b.hitCooldown = 0.15;
+        return false;
+      }
     }
   }
   return false;
@@ -2442,6 +2551,21 @@ function updateBullets(dt) {
         }
         hit = true;
         break;
+      }
+    }
+    if (!hit && mpMode === 'ffa') {
+      for (const [id, rp] of remotePlayers) {
+        if (rp.x === undefined || rp.hp <= 0) continue;
+        const dist = Math.hypot(b.x - rp.x, b.y - rp.y);
+        if (dist < PLAYER_SIZE/2 + 3) {
+          if (EQUIPPED_RANGED.splashRadius > 0) {
+            explodeSplash(b.x, b.y);
+          } else {
+            Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+          }
+          hit = true;
+          break;
+        }
       }
     }
     if (hit) bullets.splice(i, 1);
@@ -2530,6 +2654,20 @@ function doMelee() {
       }
     }
   }
+  if (mpMode === 'ffa') {
+    for (const [id, rp] of remotePlayers) {
+      if (rp.x === undefined || rp.hp <= 0) continue;
+      const dist = Math.hypot(rp.x - player.x, rp.y - player.y);
+      if (dist > EQUIPPED_MELEE.meleeRange) continue;
+      const toTarget = Math.atan2(rp.y - player.y, rp.x - player.x);
+      let diff = toTarget - aimAngle;
+      while (diff >  Math.PI) diff -= Math.PI*2;
+      while (diff < -Math.PI) diff += Math.PI*2;
+      if (Math.abs(diff) < MELEE_ARC/2) {
+        Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_MELEE.meleeDmg, isMelee: true });
+      }
+    }
+  }
   // Melee arc visual
   const aimA = aimAngle;
   for (let i = 0; i < 6; i++) {
@@ -2553,6 +2691,76 @@ function doMelee() {
 
 // === PICKUPS ===
 
+// Applies a health/ammo/armor/speed effect to the local player — shared by
+// ground pickups below and FFA killstreak rewards (killstreakRewardFor()),
+// so both grant identical effects. Weapon pickups aren't handled here (they
+// carry a {category, weaponName} pair, not a bare amount) — see
+// selectLoadoutWeapon() for that equip logic instead.
+function applyPickupEffect(kind, amount) {
+  if (kind === 'health') {
+    player.hp = Math.min(player.hp + amount, player.maxHp);
+    spawnFlash('+' + amount + ' HP', player.x, player.y - 20, '#f04060');
+  } else if (kind === 'ammo') {
+    player.reserve = Math.min(player.reserve + amount, RESERVE_AMMO_CAP);
+    spawnFlash('+' + amount + ' AMMO', player.x, player.y - 20, '#c8e840');
+  } else if (kind === 'armor') {
+    if (CONFIG.PICKUP_ARMOR.stackable === 'off') {
+      // Non-stacking: each pickup sets the charge count rather than
+      // adding to it — same "refresh, don't accumulate" idea Speed
+      // Boost's duration already uses.
+      player.armor = amount;
+      spawnFlash('ARMOR x' + amount, player.x, player.y - 20, '#40c8f0');
+    } else {
+      player.armor += amount;
+      spawnFlash('+' + amount + ' ARMOR', player.x, player.y - 20, '#40c8f0');
+    }
+  } else if (kind === 'speed') {
+    // Refreshes to the full duration rather than stacking — a buff timer,
+    // not an accumulating resource like ammo/hp.
+    player.speedBoostTimer = amount;
+    spawnFlash('SPEED BOOST', player.x, player.y - 20, '#f0e040');
+  }
+}
+
+// FFA kill-streak reward thresholds: armor at 3, speed at 5, health at 7,
+// then rotating every +3 after that. Hardcoded for v1 (a good future
+// devtool-configurable knob, same pattern as mercs_loot_pool).
+function killstreakRewardFor(streak) {
+  const amountFor = kind => kind === 'armor' ? CONFIG.PICKUP_ARMOR.hits
+    : kind === 'speed' ? CONFIG.PICKUP_SPEED.duration : 50;
+  const table = [{ at: 3, kind: 'armor' }, { at: 5, kind: 'speed' }, { at: 7, kind: 'health' }];
+  const hit = table.find(t => t.at === streak);
+  if (hit) return { kind: hit.kind, amount: amountFor(hit.kind) };
+  if (streak > 7 && (streak - 7) % 3 === 0) {
+    const cycle = ['armor', 'speed', 'health'];
+    const kind = cycle[((streak - 7) / 3 - 1) % 3];
+    return { kind, amount: amountFor(kind) };
+  }
+  return null;
+}
+
+// Host-authoritative FFA kill/death crediting — called both when the host
+// receives another player's 'eliminated' report and when the host itself is
+// the victim (damagePlayerFFA() calls this directly, no round trip needed).
+// playerScores mutations flow to every client through the existing hostState
+// broadcast already in updateMultiplayerNet(), so no new sync plumbing here.
+function applyEliminationLocally(killerId, victimId) {
+  const victim = playerScores[victimId] || (playerScores[victimId] = { name: '', score: 0, kills: 0, deaths: 0, streak: 0 });
+  victim.deaths = (victim.deaths || 0) + 1;
+  victim.streak = 0;
+  if (killerId && killerId !== victimId) {
+    const killer = playerScores[killerId] || (playerScores[killerId] = { name: '', score: 0, kills: 0, deaths: 0, streak: 0 });
+    killer.kills = (killer.kills || 0) + 1;
+    killer.score = killer.kills; // FFA ranks by kills — mirror into score so existing sort-by-score code paths keep working
+    killer.streak = (killer.streak || 0) + 1;
+    const reward = killstreakRewardFor(killer.streak);
+    if (reward) {
+      if (killerId === Net.playerId) applyPickupEffect(reward.kind, reward.amount);
+      else Net.send('killstreakReward', { targetId: killerId, kind: reward.kind, amount: reward.amount });
+    }
+  }
+}
+
 function updatePickups(dt) {
   for (let i = pickups.length-1; i >= 0; i--) {
     const p = pickups[i];
@@ -2561,13 +2769,7 @@ function updatePickups(dt) {
     const dist = Math.hypot(player.x - p.x, player.y - p.y);
     if (dist < 18) {
       SOUNDS.play(pickupSoundName(p.kind), 'pickup');
-      if (p.kind === 'health') {
-        player.hp = Math.min(player.hp + p.amount, player.maxHp);
-        spawnFlash('+' + p.amount + ' HP', p.x, p.y - 10, '#f04060');
-      } else if (p.kind === 'ammo') {
-        player.reserve = Math.min(player.reserve + p.amount, RESERVE_AMMO_CAP);
-        spawnFlash('+' + p.amount + ' AMMO', p.x, p.y - 10, '#c8e840');
-      } else if (p.kind === 'weapon') {
+      if (p.kind === 'weapon') {
         if (p.category === 'ranged') {
           Object.assign(EQUIPPED_RANGED, resolveEquippedWeapon('ranged', p.weaponName));
           player.mag = Math.min(EQUIPPED_RANGED.magSize, EQUIPPED_RANGED.ammo);
@@ -2579,22 +2781,11 @@ function updatePickups(dt) {
         }
         spawnFlash('EQUIPPED ' + p.weaponName.replace('WEAPON_','').replace(/_/g,' '), p.x, p.y - 10, '#3ef83e');
       } else if (p.kind === 'armor') {
-        const hits = CONFIG.PICKUP_ARMOR.hits;
-        if (CONFIG.PICKUP_ARMOR.stackable === 'off') {
-          // Non-stacking: each pickup sets the charge count rather than
-          // adding to it — same "refresh, don't accumulate" idea Speed
-          // Boost's duration already uses.
-          player.armor = hits;
-          spawnFlash('ARMOR x' + hits, p.x, p.y - 10, '#40c8f0');
-        } else {
-          player.armor += hits;
-          spawnFlash('+' + hits + ' ARMOR', p.x, p.y - 10, '#40c8f0');
-        }
+        applyPickupEffect('armor', CONFIG.PICKUP_ARMOR.hits);
       } else if (p.kind === 'speed') {
-        // Refreshes to the full duration rather than stacking — a buff timer,
-        // not an accumulating resource like ammo/hp.
-        player.speedBoostTimer = CONFIG.PICKUP_SPEED.duration;
-        spawnFlash('SPEED BOOST', p.x, p.y - 10, '#f0e040');
+        applyPickupEffect('speed', CONFIG.PICKUP_SPEED.duration);
+      } else {
+        applyPickupEffect(p.kind, p.amount); // health/ammo carry their own rolled amount
       }
       pickups.splice(i, 1);
       // Tell the host this pickup is gone so another player's client (which
@@ -3000,7 +3191,7 @@ function drawMpHUD(ctx) {
     ctx.font = '28px VT323, monospace';
     ctx.textAlign = 'center';
     const secs = Math.max(0, Math.ceil(mpRespawnTimer));
-    ctx.fillText('DOWNED — RESPAWNING IN ' + secs + 's', CW/2, CH - 40);
+    ctx.fillText((mpMode === 'ffa' ? 'ELIMINATED' : 'DOWNED') + ' — RESPAWNING IN ' + secs + 's', CW/2, CH - 40);
     ctx.globalAlpha = 1;
     ctx.textAlign = 'left';
   }
@@ -3015,7 +3206,9 @@ function drawMpEndedScreen(ctx) {
   ctx.font = '44px VT323, monospace';
   ctx.fillText('MATCH OVER', CW/2, 80);
 
-  const entries = Object.entries(mpFinalScores).sort((a, b) => b[1].score - a[1].score);
+  const isFfa = mpMode === 'ffa';
+  const entries = Object.entries(mpFinalScores).sort((a, b) =>
+    isFfa ? (b[1].kills || 0) - (a[1].kills || 0) : b[1].score - a[1].score);
   let y = 140;
   if (entries.length === 0) {
     ctx.fillStyle = '#5a5870';
@@ -3026,7 +3219,10 @@ function drawMpEndedScreen(ctx) {
     entries.forEach(([id, ps], i) => {
       ctx.fillStyle = i === 0 ? '#f0e040' : (id === Net.playerId ? '#3ef83e' : '#c8c6e0');
       ctx.font = '22px VT323, monospace';
-      ctx.fillText((i+1) + '. ' + (ps.name || '?') + '   ' + ps.score, CW/2, y);
+      const label = isFfa
+        ? (ps.name || '?') + '   ' + (ps.kills || 0) + ' K / ' + (ps.deaths || 0) + ' D'
+        : (ps.name || '?') + '   ' + ps.score;
+      ctx.fillText((i+1) + '. ' + label, CW/2, y);
       y += 32;
     });
   }
@@ -3035,16 +3231,17 @@ function drawMpEndedScreen(ctx) {
   if (entries.length > 0) {
     ctx.fillStyle = '#8a88a0';
     ctx.font = '16px VT323, monospace';
-    ctx.fillText('TEAM TOTAL:  ' + teamScore, CW/2, y + 6);
+    ctx.fillText(isFfa ? 'WINNER:  ' + (entries[0][1].name || '?') : 'TEAM TOTAL:  ' + teamScore, CW/2, y + 6);
     y += 34;
   }
 
   const bw = 220, bh = 46, bx = CW/2 - bw/2;
   let by = y + 16;
 
-  // Submitting the team's run is the host's call only — everyone else just
-  // sees the final scores and heads back to browsing lobbies.
-  if (isHost && entries.length > 0) {
+  // Submitting the team's run is the host's call only, and only makes sense
+  // for coop (FFA has no persistent leaderboard) — everyone else just sees
+  // the final scores and heads back to browsing lobbies.
+  if (isHost && !isFfa && entries.length > 0) {
     uiButton(ctx, bx, by, bw, bh, '[ SAVE TEAM RUN ]', () => {
       qualifiesForLeaderboard(teamScore, LB_BOARD_MP).then(qualifies => {
         if (qualifies) {
@@ -3070,6 +3267,117 @@ function drawMpEndedScreen(ctx) {
     ctx.fillStyle = '#c84040';
     ctx.font = '14px VT323, monospace';
     ctx.fillText(mpLbMsg, CW/2, by);
+  }
+  ctx.textAlign = 'left';
+}
+
+// Live scoreboard, shown while holding Tab during a match — reuses the same
+// sort/row logic as drawMpEndedScreen() (kills for FFA, score for coop) so
+// the in-match and final views read identically, just against the live
+// playerScores (already synced to every client via the hostState broadcast)
+// instead of the frozen mpFinalScores snapshot.
+function drawMpScoreboard(ctx) {
+  const isFfa = mpMode === 'ffa';
+  const entries = Object.entries(playerScores).sort((a, b) =>
+    isFfa ? (b[1].kills || 0) - (a[1].kills || 0) : b[1].score - a[1].score);
+
+  const panelW = 320, rowH = 28, headerH = 44;
+  const panelH = headerH + Math.max(1, entries.length) * rowH + 12;
+  const panelX = CW/2 - panelW/2, panelY = 30;
+  ctx.fillStyle = 'rgba(10,10,18,0.85)';
+  ctx.fillRect(panelX, panelY, panelW, panelH);
+  ctx.strokeStyle = '#3ef83e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(panelX + 0.5, panelY + 0.5, panelW - 1, panelH - 1);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '20px VT323, monospace';
+  ctx.fillText(isFfa ? 'SCOREBOARD — KILLS / DEATHS' : 'SCOREBOARD', CW/2, panelY + 26);
+
+  let y = panelY + headerH + 16;
+  if (entries.length === 0) {
+    ctx.fillStyle = '#5a5870';
+    ctx.font = '14px VT323, monospace';
+    ctx.fillText('No scores yet.', CW/2, y);
+  } else {
+    entries.forEach(([id, ps], i) => {
+      ctx.fillStyle = i === 0 ? '#f0e040' : (id === Net.playerId ? '#3ef83e' : '#c8c6e0');
+      ctx.font = '16px VT323, monospace';
+      const label = isFfa
+        ? (ps.name || '?') + '   ' + (ps.kills || 0) + ' K / ' + (ps.deaths || 0) + ' D'
+        : (ps.name || '?') + '   ' + ps.score;
+      ctx.fillText((i+1) + '. ' + label, CW/2, y);
+      y += rowH;
+    });
+  }
+  ctx.textAlign = 'left';
+}
+
+// FFA pre-match loadout pick + mid-match switch (reopened with 'b'). Mirrors
+// updatePickups()'s ground-weapon-pickup swap branch exactly, extracted so
+// both call sites share identical equip logic.
+function selectLoadoutWeapon(category, name) {
+  if (category === 'ranged') {
+    Object.assign(EQUIPPED_RANGED, resolveEquippedWeapon('ranged', name));
+    player.mag = Math.min(EQUIPPED_RANGED.magSize, EQUIPPED_RANGED.ammo);
+    player.reserve = EQUIPPED_RANGED.ammo - player.mag;
+    player.reloading = false; player.reloadTimer = 0; player.fireCd = 0;
+  } else {
+    Object.assign(EQUIPPED_MELEE, resolveEquippedWeapon('melee', name));
+    player.meleeCd = 0;
+  }
+}
+
+function drawMpLoadoutScreen(ctx, opts) {
+  opts = opts || {};
+  const closable = !!opts.closable;
+  ctx.fillStyle = closable ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.92)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '36px VT323, monospace';
+  ctx.fillText(closable ? 'SWITCH LOADOUT' : 'CHOOSE YOUR LOADOUT', CW/2, 70);
+
+  const pool = lootPoolEntries();
+  const ranged = pool.filter(e => e.category === 'ranged');
+  const melee  = pool.filter(e => e.category === 'melee');
+
+  const colW = 260, colGap = 40;
+  const colX1 = CW/2 - colGap/2 - colW;
+  const colX2 = CW/2 + colGap/2;
+  const topY = 110;
+
+  function drawColumn(x, label, entries, current) {
+    ctx.fillStyle = '#8a88a0';
+    ctx.font = '18px VT323, monospace';
+    ctx.fillText(label, x + colW/2, topY);
+    let y = topY + 30;
+    if (entries.length === 0) {
+      ctx.fillStyle = '#5a5870';
+      ctx.font = '14px VT323, monospace';
+      ctx.fillText('(none in loot pool)', x + colW/2, y);
+      return;
+    }
+    entries.forEach(e => {
+      const isCurrent = e.name === current;
+      uiButton(ctx, x, y, colW, 40,
+        e.name.replace('WEAPON_','').replace(/_/g,' ') + (isCurrent ? '  [EQUIPPED]' : ''),
+        () => selectLoadoutWeapon(e.category, e.name),
+        { font: '15px VT323, monospace' });
+      y += 48;
+    });
+  }
+
+  drawColumn(colX1, 'RANGED', ranged, EQUIPPED_RANGED.name);
+  drawColumn(colX2, 'MELEE', melee, EQUIPPED_MELEE.name);
+
+  const bw = 220, bh = 46, bx = CW/2 - bw/2, by = CH - 80;
+  if (closable) {
+    uiButton(ctx, bx, by, bw, bh, '[ CLOSE ]', () => { mpLoadoutOverlayOpen = false; });
+  } else {
+    uiButton(ctx, bx, by, bw, bh, '[ CONFIRM ]', () => { STATE = 'mpPlaying'; });
   }
   ctx.textAlign = 'left';
 }
@@ -3201,6 +3509,10 @@ let mpFinalDuration = 0; // set from the 'ended' message — match-wide, not per
 let mpMatchId = null;
 let mpDowned = false;          // this client's own player hit 0 HP but the match continues
 let mpRespawnTimer = 0;        // seconds remaining until this downed player respawns
+let mpMode = 'coop';           // 'coop' | 'ffa' — set from the 'started' message's mode field
+let mySpawnIndex = 0;          // this client's position within msg.players, used for FFA's fixed corner spawn points
+let mpLoadoutOverlayOpen = false; // FFA-only: mid-match weapon-switch overlay, doesn't pause the world
+let mpScoreboardHeld = false;  // held-Tab live scoreboard overlay (both modes)
 let nextEnemyId = 1;
 let nextPickupId = 1;
 let netBroadcastTimer = 0;
@@ -3335,6 +3647,21 @@ Net.on('claim', msg => {
   if (idx !== -1) pickups.splice(idx, 1);
 });
 
+// FFA PVP damage — routed to this one specific target by server.js (unlike
+// 'hit', which is always routed to whoever's the host). Applied to our own
+// player.hp directly since that's the only client allowed to own it.
+Net.on('hitPlayer', msg => {
+  if (mpMode === 'ffa') damagePlayerFFA(msg.dmg, msg.from);
+});
+// Host-routed like 'hit'/'claim' — a just-eliminated victim reports who
+// killed them so the host (sole owner of playerScores) can credit both sides.
+Net.on('eliminated', msg => {
+  if (isHost && mpMode === 'ffa') applyEliminationLocally(msg.killerId, msg.from);
+});
+// Target-routed like 'hitPlayer' — delivers a kill-streak reward to whichever
+// non-host player earned it.
+Net.on('killstreakReward', msg => applyPickupEffect(msg.kind, msg.amount));
+
 Net.onClose = () => {
   if (STATE === 'mpBrowse' || STATE === 'mpLobby' || STATE === 'mpName' || STATE === 'mpConnect' || STATE === 'mpPlaying') {
     mpConnectError = 'Disconnected from multiplayer server.';
@@ -3366,7 +3693,15 @@ function enterMultiplayer() {
 }
 
 function startMultiplayerMatch(msg) {
-  STATE = 'mpPlaying';
+  mpMode = msg.mode === 'ffa' ? 'ffa' : 'coop';
+  mySpawnIndex = msg.players.findIndex(p => p.id === Net.playerId);
+  mpLoadoutOverlayOpen = false;
+  mpScoreboardHeld = false;
+  // FFA players pick a loadout before entering the arena; coop goes straight
+  // into mpPlaying exactly as before. An empty loot pool can't populate the
+  // loadout screen with anything selectable, so fall straight through to the
+  // devtool-configured defaults instead of softlocking on an empty screen.
+  STATE = (mpMode === 'ffa' && lootPoolEntries().length > 0) ? 'mpLoadout' : 'mpPlaying';
   isHost = Net.playerId === msg.hostId;
   nextEnemyId = 1; nextPickupId = 1;
   netBroadcastTimer = 0;
@@ -3381,7 +3716,7 @@ function startMultiplayerMatch(msg) {
   mpCombo = 0; mpComboTimer = 0; mpPeakCombo = 0;
   comboMilestone = ''; comboMilestoneTimer = 0;
   msg.players.forEach(p => {
-    playerScores[p.id] = { name: p.name, score: 0, kills: 0 };
+    playerScores[p.id] = { name: p.name, score: 0, kills: 0, deaths: 0, streak: 0 };
     if (p.id !== Net.playerId) {
       remotePlayers.set(p.id, { name: p.name, x: undefined, y: undefined, facing: 'S', hp: 100, maxHp: 100, weaponName: 'WEAPON_PISTOL', character: null });
     }
@@ -3419,7 +3754,8 @@ function respawnPlayer() {
   mpDowned = false;
   mpRespawnTimer = 0;
   player.hp = CONFIG.PLAYER.hp; player.maxHp = CONFIG.PLAYER.hp;
-  player.x = MAP_CONFIG.playerStart.x; player.y = MAP_CONFIG.playerStart.y;
+  const spawn = (mpMode === 'ffa') ? ffaSpawnPoint(mySpawnIndex) : MAP_CONFIG.playerStart;
+  player.x = spawn.x; player.y = spawn.y;
   camera.x = Math.max(0, Math.min(MAP_W - CW, player.x - CW/2));
   camera.y = Math.max(0, Math.min(MAP_H - CH, player.y - CH/2));
   player.invincible = 2;
@@ -3513,9 +3849,11 @@ function updateMultiplayerNet(dt) {
     // still a hard end rather than waiting on independent respawn timers.
     // Remote hp is broadcast as 0 while a player is downed (see the
     // 'player' state payload below), so rp.hp <= 0 doubles as "currently
-    // downed" from the host's point of view.
+    // downed" from the host's point of view. Doesn't apply to FFA — everyone
+    // being simultaneously eliminated is normal there, not a wipe; the match
+    // only ends on the timer.
     const allDowned = mpDowned && Array.from(remotePlayers.values()).every(rp => rp.hp <= 0);
-    if (allDowned) endMultiplayerMatch();
+    if (mpMode !== 'ffa' && allDowned) endMultiplayerMatch();
   }
 }
 
@@ -3570,6 +3908,8 @@ function drawStartScreen(ctx) {
   uiButton(ctx, bx, by, bw, bh, '[ MULTIPLAYER ]', () => enterMultiplayer());
   by += bh + gap;
   uiButton(ctx, bx, by, bw, bh, '[ SETTINGS ]', () => { STATE = 'settings'; });
+  by += bh + gap;
+  uiButton(ctx, bx, by, bw, bh, '[ CONTROLS ]', () => { STATE = 'controls'; });
 
   ctx.fillStyle = '#5a5870';
   ctx.font = '13px VT323, monospace';
@@ -3625,6 +3965,61 @@ function drawSettingsScreen(ctx) {
   drawVolumeRow(ctx, CH/2 + 20, 'SFX VOLUME',   getSfxVolume,   setSfxVolume);
 
   const bw = 180, bh = 44, bx = CW/2 - bw/2, by = CH/2 + 70;
+  uiButton(ctx, bx, by, bw, bh, '[ BACK ]', () => { STATE = 'start'; });
+  ctx.textAlign = 'left';
+}
+
+const CONTROLS_GROUPS = [
+  { label: 'MOVEMENT', rows: [
+    ['WASD / Arrow Keys', 'Move'],
+  ]},
+  { label: 'COMBAT', rows: [
+    ['Left Click / Space', 'Shoot'],
+    ['Right Click / F', 'Melee'],
+    ['R', 'Reload'],
+    ['Mouse', 'Aim'],
+  ]},
+  { label: 'MULTIPLAYER (FFA)', rows: [
+    ['Tab (hold)', 'Live scoreboard'],
+    ['B', 'Switch loadout'],
+  ]},
+  { label: 'MENUS', rows: [
+    ['Enter', 'Confirm / quick start'],
+    ['Escape', 'Back / cancel'],
+    ['L', 'Leaderboard (start/dead screen)'],
+  ]},
+];
+
+function drawControlsScreen(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.92)';
+  ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#3ef83e';
+  ctx.font = '40px VT323, monospace';
+  ctx.fillText('CONTROLS', CW/2, 66);
+
+  let y = 116;
+  CONTROLS_GROUPS.forEach(group => {
+    ctx.fillStyle = '#f0c840';
+    ctx.font = '18px VT323, monospace';
+    ctx.fillText(group.label, CW/2, y);
+    y += 26;
+    group.rows.forEach(([key, action]) => {
+      ctx.fillStyle = '#3ef83e';
+      ctx.font = '16px VT323, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(key, CW/2 - 12, y);
+      ctx.fillStyle = '#c8c6e0';
+      ctx.textAlign = 'left';
+      ctx.fillText(action, CW/2 + 12, y);
+      ctx.textAlign = 'center';
+      y += 24;
+    });
+    y += 14;
+  });
+
+  const bw = 180, bh = 44, bx = CW/2 - bw/2, by = CH - 70;
   uiButton(ctx, bx, by, bw, bh, '[ BACK ]', () => { STATE = 'start'; });
   ctx.textAlign = 'left';
 }
@@ -3715,7 +4110,8 @@ function drawMpBrowseScreen(ctx) {
   const backY   = CH - bottomMargin - 40;
   const lbY     = backY - 40 - 12;
   const editY   = lbY - 40 - 12;
-  const createY = editY - bh - 12;
+  const createCoopY = editY - bh - 12;
+  const createFfaY  = createCoopY - bh - 12;
 
   const rowW = 480, rowH = 40, rowX = CW/2 - rowW/2;
   let rowY = 96;
@@ -3724,11 +4120,11 @@ function drawMpBrowseScreen(ctx) {
     ctx.font = '16px VT323, monospace';
     ctx.fillText('No lobbies yet — be the first to host one.', CW/2, rowY + 20);
   } else {
-    const maxRows = Math.max(1, Math.floor((createY - 16 - rowY) / (rowH + 8)));
+    const maxRows = Math.max(1, Math.floor((createFfaY - 16 - rowY) / (rowH + 8)));
     const visible = mpLobbies.slice(0, maxRows);
     visible.forEach(l => {
       uiButton(ctx, rowX, rowY, rowW, rowH,
-        l.name + '   (' + l.hostName + ')   ' + l.playerCount + '/' + l.maxPlayers,
+        l.name + ' [' + (l.mode === 'ffa' ? 'FFA' : 'CO-OP') + ']   (' + l.hostName + ')   ' + l.playerCount + '/' + l.maxPlayers,
         () => { Net.send('join', { lobbyId: l.id }); },
         { font: '15px VT323, monospace' });
       rowY += rowH + 8;
@@ -3740,9 +4136,14 @@ function drawMpBrowseScreen(ctx) {
     }
   }
 
-  uiButton(ctx, bx, createY, bw, bh, '[ + CREATE LOBBY ]', () => {
+  uiButton(ctx, bx, createFfaY, bw, bh, '[ + CREATE FFA ]', () => {
     TextEntry.start(mpPlayerName() + "'s Lobby", 24, name => {
-      Net.send('create', { name: (name || '').trim() || 'New Lobby' });
+      Net.send('create', { name: (name || '').trim() || 'New Lobby', mode: 'ffa' });
+    }, () => {});
+  });
+  uiButton(ctx, bx, createCoopY, bw, bh, '[ + CREATE CO-OP ]', () => {
+    TextEntry.start(mpPlayerName() + "'s Lobby", 24, name => {
+      Net.send('create', { name: (name || '').trim() || 'New Lobby', mode: 'coop' });
     }, () => {});
   });
   uiButton(ctx, bx, editY, bw, 40, '[ EDIT CHARACTER ]', () => { window.open('character-editor.html', '_blank'); });
@@ -3777,6 +4178,10 @@ function drawMpLobbyScreen(ctx) {
   ctx.fillStyle = '#5a5870';
   ctx.font = '14px VT323, monospace';
   ctx.fillText('WAITING FOR PLAYERS  (' + mpCurrentLobby.players.length + '/' + mpCurrentLobby.maxPlayers + ')', CW/2, 86);
+
+  ctx.fillStyle = mpCurrentLobby.mode === 'ffa' ? '#f0c840' : '#8a88a0';
+  ctx.font = '16px VT323, monospace';
+  ctx.fillText(mpCurrentLobby.mode === 'ffa' ? 'FREE-FOR-ALL' : 'CO-OP', CW/2, 106);
 
   let py = 130;
   mpCurrentLobby.players.forEach(p => {
@@ -4016,13 +4421,19 @@ function updateTimers(dt) {
     if (comboMilestoneTimer > 0) comboMilestoneTimer -= dt * 1000;
   }
 
-  // Spawn rate ramps up
-  spawnRate = Math.max(1.2, 3.0 - elapsed / 50);
-  spawnTimer += dt;
-  const waveSize = 1 + Math.floor(elapsed / 40);
-  if (spawnTimer >= spawnRate) {
-    spawnTimer = 0;
-    for (let i = 0; i < waveSize; i++) spawnEnemy();
+  // FFA is a pure PvP arena — no AI enemies at all, so nothing to spawn here
+  // (and since ground pickups only ever come from killEnemy()'s drop table,
+  // skipping this also means FFA never gets ground pickups — by design,
+  // rewards come from kill streaks instead, see killstreakRewardFor()).
+  if (mpMode !== 'ffa') {
+    // Spawn rate ramps up
+    spawnRate = Math.max(1.2, 3.0 - elapsed / 50);
+    spawnTimer += dt;
+    const waveSize = 1 + Math.floor(elapsed / 40);
+    if (spawnTimer >= spawnRate) {
+      spawnTimer = 0;
+      for (let i = 0; i < waveSize; i++) spawnEnemy();
+    }
   }
 }
 
@@ -4054,7 +4465,12 @@ function resetPlayerForMatch() {
   // Reset to the devtool-configured loadout — undoes any weapon pickups from a previous run.
   Object.assign(EQUIPPED_RANGED, resolveEquippedWeapon('ranged'));
   Object.assign(EQUIPPED_MELEE, resolveEquippedWeapon('melee'));
-  player.x = MAP_CONFIG.playerStart.x; player.y = MAP_CONFIG.playerStart.y;
+  // Guarded by STATE (not just mpMode) since this function is shared with
+  // single-player's startGame() — mpMode can be stale from a previous MP
+  // match and must never affect an SP run.
+  const inMpFfa = mpMode === 'ffa' && (STATE === 'mpLoadout' || STATE === 'mpPlaying');
+  const spawn = inMpFfa ? ffaSpawnPoint(mySpawnIndex) : MAP_CONFIG.playerStart;
+  player.x = spawn.x; player.y = spawn.y;
   // Snap the camera straight to the player instead of panning in from (0,0) —
   // matters once maps are bigger than one screen.
   camera.x = Math.max(0, Math.min(MAP_W - CW, player.x - CW/2));
@@ -4136,15 +4552,19 @@ function loop(now) {
   // Screen-space (HUD + overlays)
   if (STATE === 'playing' || frozenOverlay) drawHUD(ctx);
   if (mpActive) drawMpHUD(ctx);
+  if (mpActive && mpScoreboardHeld) drawMpScoreboard(ctx);
+  if (mpActive && mpLoadoutOverlayOpen) drawMpLoadoutScreen(ctx, { closable: true });
   if (STATE === 'start')         drawStartScreen(ctx);
   if (STATE === 'dead')          drawDeadScreen(ctx);
   if (STATE === 'enterInitials' || STATE === 'mpEnterInitials') drawInitialsScreen(ctx);
   if (STATE === 'leaderboard')   drawLeaderboardScreen(ctx);
   if (STATE === 'settings')      drawSettingsScreen(ctx);
+  if (STATE === 'controls')      drawControlsScreen(ctx);
   if (STATE === 'mpConnect')     drawMpConnectScreen(ctx);
   if (STATE === 'mpName')        drawMpNameScreen(ctx);
   if (STATE === 'mpBrowse')      drawMpBrowseScreen(ctx);
   if (STATE === 'mpLobby')       drawMpLobbyScreen(ctx);
+  if (STATE === 'mpLoadout')     drawMpLoadoutScreen(ctx);
   if (STATE === 'mpEnded')       drawMpEndedScreen(ctx);
   if (STATE === 'mpLeaderboard') drawMpLeaderboardScreen(ctx);
 }
@@ -4194,6 +4614,7 @@ window.addEventListener('keydown', e => {
     Net.send('list');
   }
   if (e.key === 'Escape' && STATE === 'settings') STATE = 'start';
+  if (e.key === 'Escape' && STATE === 'controls') STATE = 'start';
   if (e.key === 'Escape' && STATE === 'mpConnect' && mpConnectError) STATE = 'start';
 });
 
