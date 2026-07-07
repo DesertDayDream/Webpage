@@ -485,7 +485,12 @@ wss.on('connection', function(ws) {
       var host = lobby.players.get(lobby.hostId);
       if (!host || host.id === info.id) return; // host applies its own hits/eliminations locally, no round trip needed
       var payload = { from: info.id };
-      if (msg.type === 'hit') { payload.enemyId = msg.enemyId; payload.dmg = msg.dmg; payload.isMelee = !!msg.isMelee; }
+      if (msg.type === 'hit') {
+        payload.enemyId = msg.enemyId; payload.dmg = msg.dmg; payload.isMelee = !!msg.isMelee;
+        // Flame Cone's optional burn-status ignition (see fireFlame() in game.html) —
+        // opaque to the server, just passed through field-by-field like everything else here.
+        if (msg.burn) payload.burn = { duration: Number(msg.burn.duration) || 0, dps: Number(msg.burn.dps) || 0 };
+      }
       else if (msg.type === 'claim') { payload.pickupId = msg.pickupId; }
       else { payload.killerId = msg.killerId; }
       send(host.ws, msg.type, payload);
@@ -500,7 +505,9 @@ wss.on('connection', function(ws) {
       var target = lobby.players.get(msg.targetId);
       if (!target || target.id === info.id) return; // never let a client target itself via a spoofed message
       if (msg.type === 'hitPlayer') {
-        send(target.ws, 'hitPlayer', { from: info.id, dmg: msg.dmg, isMelee: !!msg.isMelee });
+        var hitPayload = { from: info.id, dmg: msg.dmg, isMelee: !!msg.isMelee };
+        if (msg.burn) hitPayload.burn = { duration: Number(msg.burn.duration) || 0, dps: Number(msg.burn.dps) || 0 };
+        send(target.ws, 'hitPlayer', hitPayload);
       } else {
         send(target.ws, 'killstreakReward', { kind: msg.kind, amount: msg.amount });
       }

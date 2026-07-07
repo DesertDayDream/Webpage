@@ -559,7 +559,7 @@ const SPRITE_TO_CONFIG = {
 
 const CONSTANT_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
-  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0, flameCone:'off' },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0, flameCone:'off', burnDuration:0, burnDps:0 },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
@@ -593,6 +593,8 @@ const CONSTANT_SCHEMAS = {
     { key:'hitscan',     label:'Hitscan',        type:'select', options:['off','on']     },
     { key:'maxBounces',  label:'Max Bounces',    min:0,   max:10,   step:1,  unit:''      },
     { key:'flameCone',   label:'Flame Cone',     type:'select', options:['off','on']     },
+    { key:'burnDuration',label:'Burn Duration',  min:0,   max:8000, step:100,unit:'ms'    },
+    { key:'burnDps',     label:'Burn DPS',       min:0,   max:100,  step:1,  unit:''      },
   ],
   WEAPON_KNIFE: [
     { key:'meleeDmg',   label:'Melee DMG',      min:1,   max:500,  step:1,  unit:''   },

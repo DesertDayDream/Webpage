@@ -116,11 +116,12 @@ const MELEE_ARC        = Math.PI * 0.65;
 const COMBO_TIMEOUT    = 5000;
 const MELEE_TIME_BONUS = 5;
 const RESERVE_AMMO_CAP = 200;
+const BURN_TICK_INTERVAL = 0.5; // seconds between each Flame Cone burn-status damage tick
 
 // CONFIG — default values overridden by devtool (mercs_constants in localStorage)
 const _C_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
-  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0, flameCone:'off' },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0, flameCone:'off', burnDuration:0, burnDps:0 },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
@@ -1068,6 +1069,7 @@ const player = {
   invincible:0, // brief invincibility after hit
   armor:0, // remaining Armor pickup charges — each one fully blocks one hit, see damagePlayer()
   speedBoostTimer:0, // seconds remaining on a Speed Boost pickup — see updatePlayer()
+  burnTimer:0, burnTickTimer:0, burnDps:0, burnAttackerId:null, // Flame Cone burn status (FFA only) — see tickPlayerBurn()
 };
 
 let enemies  = [];
@@ -1677,6 +1679,19 @@ function updatePlayer(dt) {
   // Timers
   if (player.flashTimer > 0) player.flashTimer -= dt;
   if (player.invincible > 0) player.invincible -= dt;
+
+  // Flame Cone burn status (FFA only — coop never damages players at all).
+  // Ticks independently of the loadout-overlay/movement gating above, same
+  // as the buff timers just above it.
+  if (mpMode === 'ffa' && player.burnTimer > 0) {
+    player.burnTimer -= dt;
+    player.burnTickTimer -= dt;
+    if (player.burnTickTimer <= 0) {
+      player.burnTickTimer += BURN_TICK_INTERVAL;
+      tickPlayerBurn(player.burnDps * BURN_TICK_INTERVAL, player.burnAttackerId);
+    }
+    if (player.burnTimer <= 0) { player.burnTimer = 0; player.burnDps = 0; }
+  }
 }
 
 // Mirrors character-editor.html's genDrawCharacter — this page is standalone
@@ -1966,6 +1981,7 @@ function spawnEnemy() {
     type, def,
     flashTimer: 0,
     deathTimer: -1,
+    burnTimer: 0, burnTickTimer: 0, burnDps: 0, burnAttackerId: null, // Flame Cone burn status
   });
 }
 
@@ -2035,7 +2051,35 @@ function damagePlayerFFA(dmg, attackerId) {
   }
 }
 
+// A burn-status DoT tick (Flame Cone weapons) — same armor/death/elimination
+// rules as damagePlayerFFA(), but deliberately doesn't set player.invincible
+// (a burn tick shouldn't grant temporary immunity to other attacks) and only
+// nudges flashTimer up to a floor instead of resetting it every tick, since
+// this fires repeatedly (every BURN_TICK_INTERVAL) rather than once per hit.
+function tickPlayerBurn(dmg, attackerId) {
+  player.flashTimer = Math.max(player.flashTimer, 0.1);
+  if (player.armor > 0) {
+    player.armor--;
+    spawnFlash('ARMOR -1', player.x, player.y - 20, '#40c8f0');
+    SOUNDS.play('PLAYER', 'damage');
+    return;
+  }
+  player.hp -= dmg;
+  SOUNDS.play('PLAYER', 'damage');
+  if (player.hp <= 0) {
+    player.hp = 0;
+    SOUNDS.play('PLAYER', 'death');
+    goDowned();
+    if (isHost) applyEliminationLocally(attackerId, Net.playerId);
+    else Net.send('eliminated', { killerId: attackerId });
+  }
+}
+
 function updateEnemies(dt) {
+  // Host during MP, always in single-player — the only side that ever
+  // simulates enemy movement/damage authoritatively.
+  const isAuthoritative = STATE !== 'mpPlaying' || isHost;
+
   for (let i = enemies.length-1; i >= 0; i--) {
     const e = enemies[i];
     if (e.deathTimer >= 0) {
@@ -2043,11 +2087,25 @@ function updateEnemies(dt) {
       // Non-host MP clients mirror whatever the host sends rather than
       // pruning locally — removing early would desync array/id bookkeeping
       // from the host's authoritative view.
-      if (e.deathTimer > 0.4 && (STATE !== 'mpPlaying' || isHost)) enemies.splice(i, 1);
+      if (e.deathTimer > 0.4 && isAuthoritative) enemies.splice(i, 1);
       continue;
     }
 
-    if (STATE !== 'mpPlaying' || isHost) {
+    // Flamethrower burn status — authoritative side only; non-host clients
+    // merely mirror the `burning` flag through the hostState broadcast for
+    // the fire visual (see updateBurningVisuals()).
+    if (isAuthoritative && e.burnTimer > 0) {
+      e.burnTimer -= dt;
+      e.burnTickTimer -= dt;
+      if (e.burnTickTimer <= 0) {
+        e.burnTickTimer += BURN_TICK_INTERVAL;
+        applyDamageToEnemy(e, e.burnDps * BURN_TICK_INTERVAL, false, e.burnAttackerId);
+      }
+      if (e.burnTimer <= 0) { e.burnTimer = 0; e.burnDps = 0; }
+      if (e.deathTimer >= 0) continue; // the burn tick just killed it
+    }
+
+    if (isAuthoritative) {
       // Movement/AI is authoritative here — host during MP, always in single-player.
       // Chase whichever connected player is nearest, not just this client's own.
       const target = STATE === 'mpPlaying' ? nearestPlayerTo(e.x, e.y) : player;
@@ -2364,6 +2422,13 @@ function fireHitscan(originX, originY, angle) {
 function fireFlame(originX, originY, aimAngle) {
   const range = EQUIPPED_RANGED.bulletRange;
   const halfArc = (EQUIPPED_RANGED.spreadAngle || 30) * Math.PI / 180 / 2;
+  // A Flame Cone weapon with a Burn Duration configured also ignites a
+  // lingering burn status — DoT damage that keeps ticking even after the
+  // target leaves the cone, see updateEnemies()/updatePlayer()'s burn-tick
+  // blocks and BURN_TICK_INTERVAL. 0 duration means "no burn" (opt-in).
+  const burn = EQUIPPED_RANGED.burnDuration > 0
+    ? { duration: EQUIPPED_RANGED.burnDuration, dps: EQUIPPED_RANGED.burnDps }
+    : null;
 
   for (const e of enemies) {
     if (e.deathTimer >= 0) continue;
@@ -2378,9 +2443,17 @@ function fireFlame(originX, originY, aimAngle) {
       // Optimistic local feedback only — the host resolves the real hp/kill.
       e.flashTimer = 0.06;
       SOUNDS.play(e.type, 'damage');
-      Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+      const hitMsg = { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false };
+      if (burn) hitMsg.burn = burn;
+      Net.send('hit', hitMsg);
     } else {
       applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+      if (burn) {
+        e.burnTimer = burn.duration / 1000;
+        e.burnTickTimer = BURN_TICK_INTERVAL;
+        e.burnDps = burn.dps;
+        e.burnAttackerId = Net.playerId;
+      }
     }
   }
 
@@ -2394,7 +2467,9 @@ function fireFlame(originX, originY, aimAngle) {
       while (diff >  Math.PI) diff -= Math.PI*2;
       while (diff < -Math.PI) diff += Math.PI*2;
       if (Math.abs(diff) > halfArc) continue;
-      Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+      const hitMsg = { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false };
+      if (burn) hitMsg.burn = burn;
+      Net.send('hitPlayer', hitMsg);
     }
   }
 
@@ -2899,6 +2974,34 @@ function drawPickups(ctx) {
 }
 
 // === PARTICLES ===
+
+// Continuous fire-particle trickle for anyone currently on fire (Flame Cone
+// burn status) — purely cosmetic. Runs identically for everyone: enemies and
+// the local player read their own authoritative burnTimer directly, while
+// remote enemies (non-host) and remote players read the `burning` flag
+// mirrored through the network (see updateMultiplayerNet()/Net.on('state')).
+function updateBurningVisuals() {
+  function trickle(x, y) {
+    if (Math.random() > 0.5) return; // don't spawn a particle every single frame — too dense
+    const roll = Math.random();
+    particles.push({
+      x: x + (Math.random()-0.5)*10, y: y + (Math.random()-0.5)*10,
+      dx: (Math.random()-0.5)*20, dy: -30 - Math.random()*30,
+      color: roll < 0.33 ? '#ff4d1a' : roll < 0.66 ? '#ff9c1a' : '#ffe066',
+      life: 0.2 + Math.random()*0.15,
+      maxLife: 0.35,
+      size: 3 + Math.random()*3,
+    });
+  }
+
+  for (const e of enemies) {
+    if (e.deathTimer < 0 && (e.burnTimer > 0 || e.burning)) trickle(e.x, e.y);
+  }
+  if (mpMode === 'ffa' && player.burnTimer > 0 && !mpDowned) trickle(player.x, player.y);
+  remotePlayers.forEach(rp => {
+    if (rp.burning && rp.hp > 0 && rp.x !== undefined) trickle(rp.x, rp.y);
+  });
+}
 
 function updateParticles(dt) {
   for (let i = particles.length-1; i >= 0; i--) {
@@ -3631,6 +3734,7 @@ Net.on('state', msg => {
     rp.targetX = msg.data.x; rp.targetY = msg.data.y;
     rp.facing = msg.data.facing; rp.hp = msg.data.hp; rp.maxHp = msg.data.maxHp;
     rp.weaponName = msg.data.weaponName;
+    rp.burning = msg.data.burning;
     // Only sent once (see updateMultiplayerNet) — don't let the many ticks
     // that omit it stomp the value back to null once it's been received.
     if (msg.data.character) rp.character = msg.data.character;
@@ -3749,7 +3853,17 @@ Net.on('state', msg => {
 Net.on('hit', msg => {
   if (!isHost) return;
   const e = enemies.find(en => en.id === msg.enemyId && en.deathTimer < 0);
-  if (e) applyDamageToEnemy(e, msg.dmg, !!msg.isMelee, msg.from);
+  if (!e) return;
+  applyDamageToEnemy(e, msg.dmg, !!msg.isMelee, msg.from);
+  // A non-host client's Flame Cone hit also carries an optional burn payload
+  // (see fireFlame()) — the host is the only one who ticks it, so ignite it
+  // here rather than trusting the sender's own (non-authoritative) copy.
+  if (msg.burn && msg.burn.duration > 0 && e.deathTimer < 0) {
+    e.burnTimer = msg.burn.duration / 1000;
+    e.burnTickTimer = BURN_TICK_INTERVAL;
+    e.burnDps = msg.burn.dps;
+    e.burnAttackerId = msg.from;
+  }
 });
 Net.on('claim', msg => {
   if (!isHost) return;
@@ -3761,7 +3875,17 @@ Net.on('claim', msg => {
 // 'hit', which is always routed to whoever's the host). Applied to our own
 // player.hp directly since that's the only client allowed to own it.
 Net.on('hitPlayer', msg => {
-  if (mpMode === 'ffa') damagePlayerFFA(msg.dmg, msg.from);
+  if (mpMode !== 'ffa') return;
+  damagePlayerFFA(msg.dmg, msg.from);
+  // Ignite/refresh our own burn status (see fireFlame()/tickPlayerBurn()) —
+  // ticked locally each frame in updatePlayer() since this client is the
+  // only one allowed to own its own hp.
+  if (msg.burn && msg.burn.duration > 0) {
+    player.burnTimer = msg.burn.duration / 1000;
+    player.burnTickTimer = BURN_TICK_INTERVAL;
+    player.burnDps = msg.burn.dps;
+    player.burnAttackerId = msg.from;
+  }
 });
 // Host-routed like 'hit'/'claim' — a just-eliminated victim reports who
 // killed them so the host (sole owner of playerScores) can credit both sides.
@@ -3869,6 +3993,7 @@ function respawnPlayer() {
   camera.x = Math.max(0, Math.min(MAP_W - CW, player.x - CW/2));
   camera.y = Math.max(0, Math.min(MAP_H - CH, player.y - CH/2));
   player.invincible = 2;
+  player.burnTimer = 0; player.burnTickTimer = 0; player.burnDps = 0; player.burnAttackerId = null;
   spawnFlash('RESPAWNED', player.x, player.y - 20, '#3ef83e');
 }
 
@@ -3932,6 +4057,7 @@ function updateMultiplayerNet(dt) {
     x: player.x, y: player.y, facing: player.facing,
     hp: mpDowned ? 0 : player.hp, maxHp: player.maxHp,
     weaponName: EQUIPPED_RANGED.name,
+    burning: player.burnTimer > 0, // cosmetic-only for other clients, see updateBurningVisuals()
   };
   // Sent once, not every tick — it never changes mid-match and WebSocket
   // delivery is reliable, so there's nothing to gain from repeating it.
@@ -3943,6 +4069,7 @@ function updateMultiplayerNet(dt) {
       enemies: enemies.map(e => ({
         id: e.id, x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp, type: e.type,
         flashTimer: e.flashTimer, deathTimer: e.deathTimer, angle: e.angle,
+        burning: e.burnTimer > 0, // cosmetic-only for non-host clients, see updateBurningVisuals()
       })),
       pickups: pickups.map(p => ({
         id: p.id, kind: p.kind, x: p.x, y: p.y, timer: p.timer,
@@ -4591,6 +4718,7 @@ function resetPlayerForMatch() {
   player.rawAngle = 0; player.facing = 'S'; player.meleeCd = 0; player.fireCd = 0;
   player.flashTimer = 0; player.invincible = 0;
   player.armor = 0; player.speedBoostTimer = 0;
+  player.burnTimer = 0; player.burnTickTimer = 0; player.burnDps = 0; player.burnAttackerId = null;
   enemies = []; bullets = []; remoteBullets = []; pickups = []; particles = []; flashes = []; shockwaves = []; beams = [];
   mainTimer = 150; elapsed = 0;
   spawnTimer = 0; spawnRate = 3.0;
@@ -4629,6 +4757,7 @@ function loop(now) {
     updateEnemies(dt);
     updateBullets(dt);
     updatePickups(dt);
+    updateBurningVisuals();
     updateParticles(dt);
     updateFlashes(dt);
     updateShockwaves(dt);
