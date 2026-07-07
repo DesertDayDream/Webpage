@@ -120,7 +120,7 @@ const RESERVE_AMMO_CAP = 200;
 // CONFIG — default values overridden by devtool (mercs_constants in localStorage)
 const _C_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
-  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0 },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0, flameCone:'off' },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
@@ -2246,6 +2246,13 @@ function spawnBullet() {
   const originY = player.y + anchor.y + Math.sin(aimAngle) * GUN_LENGTH;
   const spreadRad = EQUIPPED_RANGED.spreadAngle * Math.PI / 180;
 
+  // Flame Cone weapons (e.g. a flamethrower) never spawn any pellets/rays at
+  // all — see fireFlame() for the direct cone-tick damage instead.
+  if (EQUIPPED_RANGED.flameCone === 'on') {
+    fireFlame(originX, originY, aimAngle);
+    return;
+  }
+
   // Hitscan weapons (e.g. a rail gun) resolve every pellet instantly along its
   // aim line instead of spawning a travelling projectile — see fireHitscan().
   if (EQUIPPED_RANGED.hitscan === 'on') {
@@ -2345,6 +2352,72 @@ function fireHitscan(originX, originY, angle) {
   beams.push({ x1: originX, y1: originY, x2: x, y2: y, color: '#7fe8ff', timer: 0, duration: 0.08 });
   if (STATE === 'mpPlaying') {
     Net.send('state', { kind: 'beam', data: { x1: originX, y1: originY, x2: x, y2: y } });
+  }
+}
+
+// Flame Cone weapons (e.g. a flamethrower) never spawn a projectile at all —
+// each "shot" (throttled by the normal fireCd/fireDelay like every other
+// weapon, so a fast fireDelay + auto fireMode is what makes it feel
+// continuous) instantly ticks bulletDmg to every enemy/player within
+// bulletRange and inside a cone around the aim angle, reusing the Spread
+// slider as the cone's full angle instead of a per-pellet scatter angle.
+function fireFlame(originX, originY, aimAngle) {
+  const range = EQUIPPED_RANGED.bulletRange;
+  const halfArc = (EQUIPPED_RANGED.spreadAngle || 30) * Math.PI / 180 / 2;
+
+  for (const e of enemies) {
+    if (e.deathTimer >= 0) continue;
+    const dist = Math.hypot(e.x - originX, e.y - originY);
+    if (dist > range) continue;
+    const toEnemy = Math.atan2(e.y - originY, e.x - originX);
+    let diff = toEnemy - aimAngle;
+    while (diff >  Math.PI) diff -= Math.PI*2;
+    while (diff < -Math.PI) diff += Math.PI*2;
+    if (Math.abs(diff) > halfArc) continue;
+    if (STATE === 'mpPlaying' && !isHost) {
+      // Optimistic local feedback only — the host resolves the real hp/kill.
+      e.flashTimer = 0.06;
+      SOUNDS.play(e.type, 'damage');
+      Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+    } else {
+      applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+    }
+  }
+
+  if (mpMode === 'ffa') {
+    for (const [id, rp] of remotePlayers) {
+      if (rp.x === undefined || rp.hp <= 0) continue;
+      const dist = Math.hypot(rp.x - originX, rp.y - originY);
+      if (dist > range) continue;
+      const toTarget = Math.atan2(rp.y - originY, rp.x - originX);
+      let diff = toTarget - aimAngle;
+      while (diff >  Math.PI) diff -= Math.PI*2;
+      while (diff < -Math.PI) diff += Math.PI*2;
+      if (Math.abs(diff) > halfArc) continue;
+      Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+    }
+  }
+
+  // Flame particle burst, scattered across the cone — the only visual
+  // feedback, same idea as fireHitscan()'s instant beam but shaped like fire
+  // instead of a single trace line.
+  for (let i = 0; i < 6; i++) {
+    const a = aimAngle + (Math.random() - 0.5) * halfArc * 2;
+    const d = 10 + Math.random() * range;
+    const roll = Math.random();
+    particles.push({
+      x: originX + Math.cos(a) * d,
+      y: originY + Math.sin(a) * d,
+      dx: Math.cos(a) * 80, dy: Math.sin(a) * 80,
+      color: roll < 0.33 ? '#ff4d1a' : roll < 0.66 ? '#ff9c1a' : '#ffe066',
+      life: 0.12 + Math.random() * 0.1,
+      maxLife: 0.22,
+      size: 4 + Math.random() * 4,
+    });
+  }
+
+  if (STATE === 'mpPlaying') {
+    Net.send('state', { kind: 'flame', data: { x: originX, y: originY, angle: aimAngle, range, halfArc } });
   }
 }
 
@@ -3649,6 +3722,25 @@ Net.on('state', msg => {
     // this just draws the same instant trace line for everyone else.
     const d = msg.data;
     beams.push({ x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2, color: '#7fe8ff', timer: 0, duration: 0.08 });
+  } else if (msg.kind === 'flame') {
+    // Cosmetic-only sync (see fireFlame()) — damage was already resolved by
+    // the shooter's own client via applyDamageToEnemy/'hit'/'hitPlayer'; this
+    // just replays the same flame-cone particle burst for everyone else.
+    const d = msg.data;
+    for (let i = 0; i < 6; i++) {
+      const a = d.angle + (Math.random() - 0.5) * d.halfArc * 2;
+      const dist = 10 + Math.random() * d.range;
+      const roll = Math.random();
+      particles.push({
+        x: d.x + Math.cos(a) * dist,
+        y: d.y + Math.sin(a) * dist,
+        dx: Math.cos(a) * 80, dy: Math.sin(a) * 80,
+        color: roll < 0.33 ? '#ff4d1a' : roll < 0.66 ? '#ff9c1a' : '#ffe066',
+        life: 0.12 + Math.random() * 0.1,
+        maxLife: 0.22,
+        size: 4 + Math.random() * 4,
+      });
+    }
   }
 });
 
