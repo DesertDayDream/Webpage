@@ -312,6 +312,9 @@
       </div>
     </div>
 
+    <div class="section-title" style="margin-top:20px;">&gt; <span>SFX SETTINGS</span> // applies globally to every sound effect, not per-sound</div>
+    <div id="sfx-settings-panel" style="padding:10px 0;"></div>
+
     <div class="section-title" style="margin-top:20px;">&gt; <span>CHARACTERS</span> // player</div>
     <div id="group-characters"></div>
 
@@ -2285,6 +2288,34 @@ function buildSoundSliders(name, kinds) {
   return wrap;
 }
 
+// SFX retrigger mode — 'throttle' (default) silently drops a same-sound
+// retrigger within a short window (e.g. many enemies taking damage in the
+// same instant), so a burst never plays more than the first hit but some go
+// unheard. 'cut' never drops a trigger — it stops whichever instance of that
+// exact sound is already playing and starts the new one immediately, so
+// every hit is audible at the cost of truncating the previous instance's
+// tail. Read directly by game.html's SOUNDS.play() via this same key.
+const SFX_RETRIGGER_MODE_KEY = 'mercs_sfx_retrigger_mode';
+
+function getSfxRetriggerMode() {
+  return localStorage.getItem(SFX_RETRIGGER_MODE_KEY) === 'cut' ? 'cut' : 'throttle';
+}
+
+function setSfxRetriggerMode(mode) {
+  localStorage.setItem(SFX_RETRIGGER_MODE_KEY, mode === 'cut' ? 'cut' : 'throttle');
+}
+
+function renderSfxSettings() {
+  const panel = document.getElementById('sfx-settings-panel');
+  panel.innerHTML = '';
+  const toggle = makeToggle('CUT ON RETRIGGER', getSfxRetriggerMode() === 'cut', checked => {
+    setSfxRetriggerMode(checked ? 'cut' : 'throttle');
+    setStatus((checked ? 'Enabled' : 'Disabled') + ' cut-on-retrigger for sound effects — reload game to take effect');
+  }, 'toggle-sfx-retrigger');
+  toggle.label.title = 'When a sound retriggers rapidly (e.g. several enemies taking damage at once), cut the previous instance and play the new one immediately instead of silently dropping it';
+  panel.appendChild(toggle.label);
+}
+
 function renderMixer() {
   ['menu', 'gameplay'].forEach(playlist => {
     const container = document.getElementById('mixer-' + playlist + '-list');
@@ -2950,6 +2981,7 @@ function applyServerConfigToLocalStorage(cfg) {
   if (cfg.weaponDropWeights) localStorage.setItem('mercs_weapon_drop_weights', JSON.stringify(cfg.weaponDropWeights));
   if (cfg.equippedRanged) localStorage.setItem('mercs_equipped_ranged', cfg.equippedRanged);
   if (cfg.equippedMelee)  localStorage.setItem('mercs_equipped_melee', cfg.equippedMelee);
+  if (cfg.sfxRetriggerMode) localStorage.setItem('mercs_sfx_retrigger_mode', cfg.sfxRetriggerMode);
   if (cfg.customWeapons)  localStorage.setItem('mercs_custom_weapons', JSON.stringify(cfg.customWeapons));
   if (cfg.customEnemies)  localStorage.setItem('mercs_custom_enemies', JSON.stringify(cfg.customEnemies));
   if (cfg.sprites) {
@@ -3007,6 +3039,8 @@ function gatherPublishConfig() {
   if (equippedRanged) cfg.equippedRanged = equippedRanged;
   const equippedMelee = localStorage.getItem('mercs_equipped_melee');
   if (equippedMelee) cfg.equippedMelee = equippedMelee;
+  const sfxRetriggerMode = localStorage.getItem('mercs_sfx_retrigger_mode');
+  if (sfxRetriggerMode) cfg.sfxRetriggerMode = sfxRetriggerMode;
   const customWeapons = localStorage.getItem('mercs_custom_weapons');
   if (customWeapons) cfg.customWeapons = JSON.parse(customWeapons);
   const customEnemies = localStorage.getItem('mercs_custom_enemies');
@@ -3290,6 +3324,7 @@ function initDevtool() {
     };
     renderSoundtrackList(playlist);
   });
+  renderSfxSettings();
 
   rebuildUI();
   renderLeaderboardAdmin();
