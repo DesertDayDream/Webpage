@@ -487,9 +487,12 @@ wss.on('connection', function(ws) {
       var payload = { from: info.id };
       if (msg.type === 'hit') {
         payload.enemyId = msg.enemyId; payload.dmg = msg.dmg; payload.isMelee = !!msg.isMelee;
-        // Flame Cone's optional burn-status ignition (see fireFlame() in game.html) —
-        // opaque to the server, just passed through field-by-field like everything else here.
+        // Flame Cone's optional burn-status ignition, and a water gun's
+        // optional extinguish flag (see fireFlame()/applyDamageToEnemy() in
+        // game.html) — opaque to the server, just passed through field-by-field
+        // like everything else here.
         if (msg.burn) payload.burn = { duration: Number(msg.burn.duration) || 0, dps: Number(msg.burn.dps) || 0 };
+        if (msg.extinguish) payload.extinguish = true;
       }
       else if (msg.type === 'claim') { payload.pickupId = msg.pickupId; }
       else { payload.killerId = msg.killerId; }
@@ -507,6 +510,7 @@ wss.on('connection', function(ws) {
       if (msg.type === 'hitPlayer') {
         var hitPayload = { from: info.id, dmg: msg.dmg, isMelee: !!msg.isMelee };
         if (msg.burn) hitPayload.burn = { duration: Number(msg.burn.duration) || 0, dps: Number(msg.burn.dps) || 0 };
+        if (msg.extinguish) hitPayload.extinguish = true;
         send(target.ws, 'hitPlayer', hitPayload);
       } else {
         send(target.ws, 'killstreakReward', { kind: msg.kind, amount: msg.amount });

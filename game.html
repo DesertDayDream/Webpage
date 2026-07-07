@@ -121,7 +121,7 @@ const BURN_TICK_INTERVAL = 0.5; // seconds between each Flame Cone burn-status d
 // CONFIG — default values overridden by devtool (mercs_constants in localStorage)
 const _C_DEFAULTS = {
   PLAYER:        { speed:190, hp:100, respawnTime:15 },
-  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0, flameCone:'off', burnDuration:0, burnDps:0 },
+  WEAPON_PISTOL: { ammo:60, bulletDmg:28, bulletSpeed:420, bulletRange:520, fireMode:'semi', fireDelay:120, magSize:12, reloadTime:1200, pelletCount:1, spreadAngle:0, splashRadius:0, selfDamage:'off', hitscan:'off', maxBounces:0, flameCone:'off', burnDuration:0, burnDps:0, extinguish:'off' },
   WEAPON_KNIFE:  { meleeDmg:50, meleeRange:62, meleeCd:800 },
   ENEMY_BASIC:   { speed:62,  hp:50,  dmg:10,  score:100, size:20, unlockAt:0,  spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
   ENEMY_FAST:    { speed:130, hp:28,  dmg:15,  score:150, size:16, unlockAt:30, spawnChance:100, maxAlive:0, respawnDelay:0, noRespawn:'off' },
@@ -2283,10 +2283,18 @@ function killEnemy(e, isMelee, killerId) {
 // ever calls this for real — see the bullet/melee hit-detection loops below,
 // which optimistically show local feedback but route the actual damage
 // through a `hit` network message when not the host.
-function applyDamageToEnemy(e, dmg, isMelee, killerId) {
+function applyDamageToEnemy(e, dmg, isMelee, killerId, extinguish) {
   e.hp -= dmg;
   e.flashTimer = isMelee ? 0.1 : 0.06;
   SOUNDS.play(e.type, 'damage');
+  // A ranged weapon with Extinguish on (e.g. a water gun) douses whatever
+  // burn status (Flame Cone) the target is carrying, in addition to
+  // whatever damage this hit deals — see updateBullets()/fireHitscan()/
+  // explodeSplash()/updateBouncingBullet() and the water gun's own weapon toggle.
+  if (extinguish && e.burnTimer > 0) {
+    e.burnTimer = 0; e.burnTickTimer = 0; e.burnDps = 0; e.burnAttackerId = null;
+    spawnFlash('EXTINGUISHED', e.x, e.y - 20, '#7fd8ff');
+  }
   if (e.hp <= 0) killEnemy(e, isMelee, killerId);
 }
 
@@ -2384,6 +2392,7 @@ function fireHitscan(originX, originY, angle) {
     }
   }
 
+  const extinguishes = EQUIPPED_RANGED.extinguish === 'on';
   if (hitEnemy) {
     if (EQUIPPED_RANGED.splashRadius > 0) {
       explodeSplash(x, y);
@@ -2391,15 +2400,15 @@ function fireHitscan(originX, originY, angle) {
       // Optimistic local feedback only — the host resolves the real hp/kill.
       hitEnemy.flashTimer = 0.06;
       SOUNDS.play(hitEnemy.type, 'damage');
-      Net.send('hit', { enemyId: hitEnemy.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+      Net.send('hit', { enemyId: hitEnemy.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false, extinguish: extinguishes });
     } else {
-      applyDamageToEnemy(hitEnemy, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+      applyDamageToEnemy(hitEnemy, EQUIPPED_RANGED.bulletDmg, false, Net.playerId, extinguishes);
     }
   } else if (hitPlayerId) {
     if (EQUIPPED_RANGED.splashRadius > 0) {
       explodeSplash(x, y);
     } else {
-      Net.send('hitPlayer', { targetId: hitPlayerId, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+      Net.send('hitPlayer', { targetId: hitPlayerId, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false, extinguish: extinguishes });
     }
   } else if (EQUIPPED_RANGED.splashRadius > 0) {
     explodeSplash(x, y); // missed every enemy/player but still detonates at the wall/range endpoint
@@ -2508,6 +2517,7 @@ function explodeSplash(x, y) {
   const radius = EQUIPPED_RANGED.splashRadius;
   if (radius <= 0) return; // defensive — callers already gate on this
 
+  const extinguishes = EQUIPPED_RANGED.extinguish === 'on';
   for (const e of enemies) {
     if (e.deathTimer >= 0) continue;
     const dist = Math.hypot(e.x - x, e.y - y);
@@ -2518,9 +2528,9 @@ function explodeSplash(x, y) {
       // Optimistic local feedback only — the host resolves the real hp/kill.
       e.flashTimer = 0.06;
       SOUNDS.play(e.type, 'damage');
-      Net.send('hit', { enemyId: e.id, dmg, isMelee: false });
+      Net.send('hit', { enemyId: e.id, dmg, isMelee: false, extinguish: extinguishes });
     } else {
-      applyDamageToEnemy(e, dmg, false, Net.playerId);
+      applyDamageToEnemy(e, dmg, false, Net.playerId, extinguishes);
     }
   }
 
@@ -2534,7 +2544,7 @@ function explodeSplash(x, y) {
       if (dist >= radius) continue;
       const dmg = Math.round(EQUIPPED_RANGED.bulletDmg * (1 - dist / radius));
       if (dmg <= 0) continue;
-      Net.send('hitPlayer', { targetId: id, dmg, isMelee: false });
+      Net.send('hitPlayer', { targetId: id, dmg, isMelee: false, extinguish: extinguishes });
     }
   }
 
@@ -2607,6 +2617,7 @@ function updateBouncingBullet(b, dt) {
 
   if (b.distTravelled > EQUIPPED_RANGED.bulletRange) return true;
 
+  const extinguishes = EQUIPPED_RANGED.extinguish === 'on';
   for (const e of enemies) {
     if (e.deathTimer >= 0) continue;
     // Skip the exact enemy this bullet just bounced off of for a brief grace
@@ -2620,9 +2631,9 @@ function updateBouncingBullet(b, dt) {
         // Optimistic local feedback only — the host resolves the real hp/kill.
         e.flashTimer = 0.06;
         SOUNDS.play(e.type, 'damage');
-        Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+        Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false, extinguish: extinguishes });
       } else {
-        applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+        applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId, extinguishes);
       }
       if (b.bouncesLeft <= 0) return true; // no bounces left — this hit consumes it like normal
 
@@ -2644,7 +2655,7 @@ function updateBouncingBullet(b, dt) {
       if (b.hitCooldown > 0 && id === b.lastHitId) continue;
       const dist = Math.hypot(b.x - rp.x, b.y - rp.y);
       if (dist < PLAYER_SIZE/2 + 3) {
-        Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+        Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false, extinguish: extinguishes });
         if (b.bouncesLeft <= 0) return true;
 
         const invDist = 1 / (dist || 1);
@@ -2683,6 +2694,7 @@ function updateBullets(dt) {
     }
 
     let hit = false;
+    const extinguishes = EQUIPPED_RANGED.extinguish === 'on';
     for (const e of enemies) {
       if (e.deathTimer >= 0) continue;
       const dist = Math.hypot(b.x - e.x, b.y - e.y);
@@ -2693,9 +2705,9 @@ function updateBullets(dt) {
           // Optimistic local feedback only — the host resolves the real hp/kill.
           e.flashTimer = 0.06;
           SOUNDS.play(e.type, 'damage');
-          Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+          Net.send('hit', { enemyId: e.id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false, extinguish: extinguishes });
         } else {
-          applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId);
+          applyDamageToEnemy(e, EQUIPPED_RANGED.bulletDmg, false, Net.playerId, extinguishes);
         }
         hit = true;
         break;
@@ -2709,7 +2721,7 @@ function updateBullets(dt) {
           if (EQUIPPED_RANGED.splashRadius > 0) {
             explodeSplash(b.x, b.y);
           } else {
-            Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false });
+            Net.send('hitPlayer', { targetId: id, dmg: EQUIPPED_RANGED.bulletDmg, isMelee: false, extinguish: extinguishes });
           }
           hit = true;
           break;
@@ -3854,7 +3866,7 @@ Net.on('hit', msg => {
   if (!isHost) return;
   const e = enemies.find(en => en.id === msg.enemyId && en.deathTimer < 0);
   if (!e) return;
-  applyDamageToEnemy(e, msg.dmg, !!msg.isMelee, msg.from);
+  applyDamageToEnemy(e, msg.dmg, !!msg.isMelee, msg.from, !!msg.extinguish);
   // A non-host client's Flame Cone hit also carries an optional burn payload
   // (see fireFlame()) — the host is the only one who ticks it, so ignite it
   // here rather than trusting the sender's own (non-authoritative) copy.
@@ -3885,6 +3897,14 @@ Net.on('hitPlayer', msg => {
     player.burnTickTimer = BURN_TICK_INTERVAL;
     player.burnDps = msg.burn.dps;
     player.burnAttackerId = msg.from;
+  }
+  // A ranged weapon with Extinguish on (e.g. a water gun) douses our own
+  // burn status on hit — same idea as applyDamageToEnemy()'s extinguish
+  // handling, just on the player side since a remote player's hp/status is
+  // only ever owned by their own client.
+  if (msg.extinguish && player.burnTimer > 0) {
+    player.burnTimer = 0; player.burnTickTimer = 0; player.burnDps = 0; player.burnAttackerId = null;
+    spawnFlash('EXTINGUISHED', player.x, player.y - 20, '#7fd8ff');
   }
 });
 // Host-routed like 'hit'/'claim' — a just-eliminated victim reports who
