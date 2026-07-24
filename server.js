@@ -106,7 +106,20 @@ const upload = multer({
 
 // Middleware
 app.use(compression());
-app.use(express.json({ limit: '50mb' }));
+// Skip express.json() for anything under /slam-royale — that app reads its own
+// raw request body directly off `req` (see slam-royale/server/api.js's
+// readJson()/multipart parsing), which only works if the body stream hasn't
+// already been consumed. express.json() would otherwise drain it first for
+// EVERY request site-wide, leaving Slam Royale's own body-reading code waiting
+// on 'data'/'end' events that already fired on an already-finished stream —
+// which hangs forever rather than erroring, since nothing ever rejects that
+// promise. GET/DELETE requests with no body were unaffected (nothing to drain),
+// which is why this only showed up on POST/PATCH routes like signup/login.
+var jsonBodyParser = express.json({ limit: '50mb' });
+app.use(function(req, res, next) {
+  if (req.url.indexOf('/slam-royale') === 0) return next();
+  jsonBodyParser(req, res, next);
+});
 // Uploaded filenames are unique+timestamped and never overwritten, so it's
 // safe to let browsers cache them indefinitely.
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y', immutable: true }));
