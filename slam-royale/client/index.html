@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Slam Royale</title>
+<style>
+  :root{
+    --ink:#f3efe6;--dim:#9a968d;--faint:#6b6860;--line:rgba(243,239,230,.12);
+    --panel:#14161b;--panel2:#1b1e25;--bg:#0b0d10;
+    --accent:#ffb020;--good:#4bd4a0;--warn:#e5844d;--bad:#e5484d;--sel:#3b82f6;
+    --hp:#e5484d;--hp2:#7a1f22;--stam:#ffb020;--lvl:#4bd4a0;--zone:#c94fe0;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--mono)}
+  #studioScreen{display:none;height:100%}
+  #gameScreen{display:none;height:100%}
+  #lobbyListScreen{display:none;height:100%}
+  #lobbyWaitScreen{display:none;height:100%}
+
+  /* ---------------- main menu ---------------- */
+  #menuScreen{display:flex;height:100%;align-items:center;justify-content:center;text-align:center;background:radial-gradient(60% 60% at 50% 40%,#181b22,var(--bg))}
+  #loadingScreen,#lobbyListScreen,#lobbyWaitScreen{align-items:center;justify-content:center;text-align:center;background:radial-gradient(60% 60% at 50% 40%,#181b22,var(--bg))}
+  .lobby-list{margin-top:18px;display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto}
+  .lobby-row{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);background:var(--panel2);border-radius:8px;padding:10px 12px;font-size:11px;cursor:pointer}
+  .lobby-row:hover{border-color:var(--dim)}
+  .lobby-row .n{color:var(--dim)}
+  .lobby-empty{margin-top:18px;font-size:11px;color:var(--faint)}
+  .lobby-countdown{margin-top:18px;font-size:34px;font-weight:700;color:var(--accent)}
+  .lobby-players{margin-top:14px;font-size:11px;color:var(--dim);line-height:1.8;max-height:120px;overflow-y:auto}
+  .spinner{width:44px;height:44px;margin:0 auto 20px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .menu-card{width:min(360px,86vw)}
+  .menu-title{font-size:12px;letter-spacing:.34em;text-transform:uppercase;color:var(--dim)}
+  .menu-name{font-size:28px;font-weight:700;margin-top:8px}
+  .menu-sub{margin-top:10px;font-size:11px;color:var(--dim);line-height:1.7}
+  .menu-actions{margin-top:32px;display:flex;flex-direction:column;gap:10px}
+  .menu-btn{border:1px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:8px;padding:14px;font-family:var(--mono);font-size:12px;letter-spacing:.08em;cursor:pointer;text-align:center}
+  .menu-btn:hover{border-color:var(--dim)}
+  .menu-btn .k{display:block;font-size:9.5px;color:var(--dim);margin-top:4px;letter-spacing:.12em;text-transform:none}
+  .menu-btn.pri{background:var(--accent);color:#1a1205;border-color:var(--accent);font-weight:600}
+  .menu-btn.pri .k{color:#1a1205;opacity:.7}
+  #menuErr{margin-top:18px;font-size:10.5px;color:var(--bad);display:none;white-space:pre-wrap}
+  .auth-box{margin-top:22px;text-align:left;border-top:1px solid var(--line);padding-top:18px}
+  .auth-tabs{display:flex;gap:6px;margin-bottom:10px}
+  .auth-tab{flex:1;border:1px solid var(--line);background:var(--panel2);color:var(--dim);border-radius:6px;padding:6px;font-family:var(--mono);font-size:10.5px;cursor:pointer}
+  .auth-tab.on{border-color:var(--accent);color:var(--accent)}
+  .auth-box input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:9px 10px;font-family:var(--mono);font-size:11px;margin-bottom:8px}
+  .auth-box input:focus{outline:none;border-color:var(--accent)}
+  .auth-msg{font-size:10.5px;color:var(--bad);min-height:12px;margin-top:2px}
+  .auth-msg.ok{color:var(--good)}
+  .auth-you{font-size:11px;color:var(--dim);margin-bottom:12px;text-align:center}
+  .auth-you b{color:var(--ink)}
+
+  /* ---------------- studio ---------------- */
+  .studio-root{display:flex;height:100%}
+  .st-view{flex:1;position:relative;min-width:0}
+  .st-view canvas{display:block}
+  .st-empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;pointer-events:none;transition:opacity .3s}
+  .st-empty.gone{opacity:0}
+  .st-ic{width:60px;height:60px;margin:0 auto 18px;border:1px dashed var(--line);border-radius:10px;display:grid;place-items:center;color:var(--faint);font-size:24px}
+  .st-empty h2{font-size:14px;font-weight:600}.st-empty p{margin-top:8px;font-size:11px;color:var(--dim);line-height:1.7}
+  .st-playbar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);display:flex;gap:8px;align-items:center;background:rgba(20,22,27,.8);border:1px solid var(--line);border-radius:8px;padding:7px 10px;backdrop-filter:blur(6px)}
+  .st-cur{font-size:11px;letter-spacing:.08em;min-width:66px;text-align:center;color:var(--accent)}
+  .st-ic-btn{width:26px;height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:6px;cursor:pointer;font-size:11px;display:grid;place-items:center}
+  .st-ic-btn.on{border-color:var(--accent);color:var(--accent)}
+  .st-playbar input[type=range]{width:80px;accent-color:var(--accent)}
+  .st-panel{width:352px;flex:none;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column}
+  .st-head{padding:16px 16px 12px;border-bottom:1px solid var(--line)}
+  .st-head .t{font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:var(--dim)}
+  .st-head .n{font-size:15px;font-weight:700;margin-top:2px}
+  .st-body{flex:1;overflow-y:auto;padding:14px 16px 24px}
+  .st-body::-webkit-scrollbar{width:8px}.st-body::-webkit-scrollbar-thumb{background:#2a2e37;border-radius:4px}
+  .st-sec{margin-bottom:20px}
+  .st-sec>.h{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);margin-bottom:9px;display:flex;justify-content:space-between}
+  .st-drop{border:1px dashed var(--line);border-radius:8px;padding:14px;text-align:center;cursor:pointer;transition:.15s;color:var(--dim);font-size:11px}
+  .st-drop:hover,.st-drop.over{border-color:var(--accent);color:var(--ink);background:rgba(255,176,32,.05)}
+  .st-drop b{color:var(--ink)}
+  .st-pill{margin-top:8px;font-size:11px;color:var(--good);word-break:break-all}
+  .st-rmbtn{margin-top:6px;font-size:10.5px;color:var(--faint);cursor:pointer;text-decoration:underline;width:fit-content}
+  .st-rmbtn:hover{color:var(--bad)}
+  .st-ctl{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:9px 0;font-size:11px}
+  .st-ctl label{color:var(--dim)}.st-ctl input[type=range]{flex:1;accent-color:var(--accent)}.st-ctl .v{min-width:44px;text-align:right}
+  .st-ctl input[type=number]{width:70px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:4px;font-family:var(--mono);font-size:11px;padding:3px 6px}
+  .st-ctl input[type=number]:focus{outline:none;border-color:var(--accent)}
+  .st-mtrow{display:grid;grid-template-columns:110px repeat(6,1fr);gap:4px;align-items:center;margin:3px 0;font-size:10px}
+  .st-mthead{color:var(--ink);text-transform:uppercase;letter-spacing:.08em;font-size:9px;font-weight:600;text-align:center}
+  .st-mthead div:first-child{text-align:left}
+  .st-mtlbl{color:var(--dim)}
+  .st-mtrow input[type=number]{width:100%;box-sizing:border-box;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:4px;font-family:var(--mono);font-size:10px;padding:3px 4px}
+  .st-mtrow input[type=number]:focus{outline:none;border-color:var(--accent)}
+  input[type=color]{width:30px;height:24px;border:1px solid var(--line);border-radius:5px;background:none;cursor:pointer;padding:0}
+  .st-tg{cursor:pointer;user-select:none;border:1px solid var(--line);border-radius:5px;padding:2px 8px;font-size:10px;color:var(--dim)}
+  .st-tg.on{border-color:var(--good);color:var(--good)}
+  /* Rotary knob (Audio Mixer trim start/end — see client/studio.js's makeKnob()):
+     drag vertically to adjust, --ang (set by JS) sweeps the indicator -135deg..+135deg. */
+  .st-knob{--ang:-135deg;width:30px;height:30px;border-radius:50%;flex:none;cursor:ns-resize;
+    background:radial-gradient(circle at 50% 42%,var(--panel2),var(--bg) 78%);
+    border:1px solid var(--line);position:relative;touch-action:none;user-select:none}
+  .st-knob:hover{border-color:var(--accent)}
+  .st-knob::after{content:'';position:absolute;left:50%;top:4px;width:2px;height:10px;border-radius:1px;
+    background:var(--accent);transform-origin:50% 11px;transform:translateX(-50%) rotate(var(--ang))}
+  .st-grp{font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);margin:14px 0 6px}
+  .st-mrow{display:grid;grid-template-columns:64px 1fr 24px;gap:7px;align-items:center;margin-bottom:6px}
+  .st-mrow .mst{font-size:11px}
+  .st-mrow select{width:100%;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:5px;font-family:var(--mono);font-size:10.5px;padding:5px 6px;cursor:pointer}
+  .st-mrow select.unset{color:var(--faint)}.st-mrow select.bad{border-color:var(--bad)}
+  .st-mrow .mpv{width:24px;height:24px;border:1px solid var(--line);background:var(--panel2);color:var(--dim);border-radius:5px;cursor:pointer;font-size:9px;display:grid;place-items:center}
+  .st-mrow.active .mst{color:var(--accent)}.st-mrow.active .mpv{border-color:var(--accent);color:var(--accent)}
+  .st-foot{border-top:1px solid var(--line);padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+  .st-btn{border:1px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:7px;padding:9px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;cursor:pointer;text-align:center}
+  .st-btn:hover{border-color:var(--dim)}
+  .st-btn.pri{background:var(--accent);color:#1a1205;border-color:var(--accent);font-weight:600}
+  .st-row2{display:flex;gap:8px}.st-row2 .st-btn{flex:1}
+  .st-json{width:100%;height:100px;background:var(--bg);color:var(--dim);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:10px;padding:8px;resize:none;white-space:pre;overflow:auto}
+  .st-status{font-size:10px;color:var(--faint);min-height:12px}.st-status.err{color:var(--bad)}.st-status.ok{color:var(--good)}.st-status.warn{color:var(--warn)}
+  .st-clearlink{font-size:9.5px;color:var(--faint);text-align:center;cursor:pointer;text-decoration:underline;margin-top:2px}
+  .st-clearlink:hover{color:var(--dim)}
+
+  /* ---------------- game HUD ---------------- */
+  #app{position:fixed;inset:0}#app canvas{display:block}
+  #hitflash{position:fixed;inset:0;pointer-events:none;z-index:4;transition:background .1s}
+  .hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+  .corner{position:absolute;padding:14px 16px}.bl{bottom:0;left:0}.tl{top:0;left:0}
+  .lbl{font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}
+  .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--lvl);margin-right:6px;vertical-align:1px;box-shadow:0 0 8px var(--lvl)}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:10.5px}.keys b{color:var(--ink);font-weight:600}.keys span{color:var(--dim)}
+  .brand{font-size:10px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase;margin-bottom:10px}
+  #top{position:absolute;top:14px;left:50%;transform:translateX(-50%);text-align:center}
+  #alive{font-size:22px;font-weight:600}#alive small{font-size:11px;color:var(--dim);letter-spacing:.15em}
+  #backBtn{position:absolute;top:12px;right:14px;pointer-events:auto;border:1px solid var(--line);background:rgba(20,22,27,.7);color:var(--dim);border-radius:6px;padding:6px 11px;font-family:var(--mono);font-size:10px;letter-spacing:.1em;cursor:pointer}
+  #backBtn:hover{color:var(--ink);border-color:var(--dim)}
+  .st-head{position:relative}
+  #studioBackBtn{position:absolute;top:14px;right:14px;border:1px solid var(--line);background:var(--panel2);color:var(--dim);border-radius:6px;padding:5px 10px;font-family:var(--mono);font-size:10px;letter-spacing:.1em;cursor:pointer}
+  #studioBackBtn:hover{color:var(--ink);border-color:var(--dim)}
+  #vitals{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);width:min(420px,70vw)}
+  .bar{height:12px;border:1px solid var(--line);border-radius:2px;overflow:hidden;background:rgba(0,0,0,.35);position:relative}
+  .bar .fill,.barsm .fill{position:absolute;inset:0;transform-origin:left;transition:transform .08s linear}
+  #hpFill{background:linear-gradient(90deg,var(--hp2),var(--hp))}#stFill{background:var(--stam)}
+  .barsm{height:8px;border:1px solid var(--line);border-radius:2px;overflow:hidden;background:rgba(0,0,0,.35);position:relative;margin-top:5px}
+  #bsFill{background:var(--sel)}
+  #ssFill{background:linear-gradient(90deg,#c98a1a,#ffd257)}
+  #ssBar.ready{border-color:#ffd257;box-shadow:0 0 8px 2px rgba(255,210,87,.7)}
+  #ssBar.active{border-color:#ffee66;box-shadow:0 0 14px 4px rgba(255,238,102,.95)}
+  @keyframes stDeny{0%{transform:translateX(0)}20%{transform:translateX(-3px)}40%{transform:translateX(3px)}60%{transform:translateX(-2px)}80%{transform:translateX(2px)}100%{transform:translateX(0)}}
+  #stBar.deny{border-color:var(--bad);box-shadow:0 0 10px 3px rgba(229,72,77,.85);animation:stDeny .3s ease}
+  #carrying{display:flex;align-items:center;justify-content:center;gap:7px;font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;color:#d3a877;margin-bottom:6px;opacity:0;transform:scale(.92);transition:opacity .15s,transform .15s}
+  #carrying.show{opacity:1;transform:scale(1)}
+  #carrying .icon{width:11px;height:14px;flex:none;border-radius:3px;background:#8a5a2b;box-shadow:inset 0 4px 0 0 #2a1f14,inset 0 -4px 0 0 #2a1f14,0 0 9px 3px rgba(138,90,43,.7)}
+  #row{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+  #lvl{font-size:11px}#lvl b{color:var(--lvl)}
+  #combo{font-size:11px;color:var(--stam);opacity:0;transition:opacity .15s}
+  #gate,#end{position:fixed;inset:0;display:grid;place-items:center;z-index:5;background:radial-gradient(70% 70% at 50% 45%,rgba(11,13,16,.4),rgba(11,13,16,.85));transition:opacity .35s}
+  #gate{cursor:pointer}#end{pointer-events:none;opacity:0}
+  #gate.hidden,#end.hidden{opacity:0;pointer-events:none}#end.show{opacity:1;pointer-events:auto}
+  #end .menu-btn{margin-top:22px;min-width:180px}
+  #end .menu-btn+.menu-btn{margin-top:10px}
+  /* Countdown (server-authoritative pre-battle freeze — see server/world.js):
+     deliberately no darkening background like #gate/#end above — the arena/opponents
+     should stay fully visible behind the number, not obscured, while everyone's frozen. */
+  #countdown{position:fixed;inset:0;display:grid;place-items:center;z-index:6;pointer-events:none;opacity:0;transition:opacity .15s}
+  #countdown.show{opacity:1}
+  .cdnum{font-size:130px;font-weight:800;color:#ffd257;text-shadow:0 0 34px rgba(255,180,32,.85),0 4px 16px rgba(0,0,0,.65);letter-spacing:.02em}
+  #countdown.battle .cdnum{color:#ff5533;font-size:92px;text-shadow:0 0 44px rgba(255,85,51,.9),0 4px 16px rgba(0,0,0,.75)}
+  .card{text-align:center;transform:translateY(-6px)}
+  .big{font-size:16px;letter-spacing:.06em}.huge{font-size:30px;font-weight:700}
+  .sub{margin-top:10px;font-size:11px;color:var(--dim)}
+  .ring{width:54px;height:54px;margin:0 auto 20px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center}
+  .ring::before{content:"";width:0;height:0;border-left:12px solid var(--ink);border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:3px;opacity:.9}
+  .win{color:var(--lvl)}.lose{color:var(--hp)}
+  #charWarn{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:6;background:rgba(20,22,27,.92);border:1px solid var(--warn);color:var(--ink);border-radius:8px;padding:9px 14px;font-size:11px;max-width:min(560px,80vw);text-align:center;opacity:0;pointer-events:none;transition:opacity .25s}
+  #charWarn.show{opacity:1}
+</style>
+</head>
+<body>
+  <div id="menuScreen">
+    <div class="menu-card">
+      <div class="menu-title">Slam Royale</div>
+      <div class="menu-name">Main Menu</div>
+      <div class="menu-sub">An authoritative-server multiplayer melee brawler.</div>
+      <div class="menu-actions">
+        <button class="menu-btn pri" id="menuPlay">Enter match<span class="k">quick play · procedural fighter</span></button>
+        <button class="menu-btn" id="menuStudio" style="display:none">Character Studio<span class="k">admin only — edit the game's default character</span></button>
+      </div>
+      <div id="menuErr"></div>
+      <div class="auth-box" id="authBox"></div>
+    </div>
+  </div>
+
+  <div id="studioScreen"></div>
+
+  <div id="lobbyListScreen">
+    <div class="menu-card">
+      <div class="menu-title">Slam Royale</div>
+      <div class="menu-name">Lobbies</div>
+      <div class="menu-sub">Join an open lobby, or quick-join to be dropped into one automatically.</div>
+      <div class="lobby-list" id="lobbyList"></div>
+      <div class="lobby-empty" id="lobbyEmpty" style="display:none">No open lobbies — quick-join will start a new one.</div>
+      <div class="menu-actions">
+        <button class="menu-btn pri" id="lobbyQuickJoin">Quick Join<span class="k">auto-assign to any open lobby</span></button>
+        <button class="menu-btn" id="lobbyBackBtn">← back to menu</button>
+      </div>
+      <div id="lobbyListErr" class="menu-sub" style="color:var(--bad);display:none"></div>
+    </div>
+  </div>
+
+  <div id="lobbyWaitScreen">
+    <div class="menu-card">
+      <div class="menu-title">Slam Royale</div>
+      <div class="menu-name" id="lobbyWaitPhase">Waiting for players…</div>
+      <div class="menu-sub" id="lobbyWaitCount">0 / 8 joined</div>
+      <div class="lobby-countdown" id="lobbyWaitCountdown">20s</div>
+      <div class="lobby-players" id="lobbyWaitPlayers"></div>
+      <div class="menu-actions">
+        <button class="menu-btn" id="lobbyLeaveBtn">← leave lobby</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="loadingScreen" style="display:none">
+    <div class="card"><div class="spinner"></div><div class="big">Loading match…</div><div class="sub" id="loadingSub">Fetching character assets…</div></div>
+  </div>
+
+  <div id="gameScreen">
+    <div id="app"></div>
+    <div id="hitflash"></div>
+    <div id="charWarn"></div>
+    <div class="hud">
+      <div id="top"><div id="alive">8 <small>ALIVE</small></div></div>
+      <button id="backBtn">← studio</button>
+      <div class="corner tl"><div class="lbl"><span class="dot"></span><span id="netStatus">connecting…</span></div><div class="lbl" id="fpsCounter"></div></div>
+      <div id="vitals">
+        <div id="carrying"><span class="icon"></span><span>item ready · E to throw</span></div>
+        <div id="row"><div id="lvl">LVL <b>1</b></div><div id="combo">COMBO ×2</div></div>
+        <div class="bar"><div class="fill" id="hpFill"></div></div>
+        <div class="barsm" id="stBar"><div class="fill" id="stFill"></div></div>
+        <div class="barsm" id="bsBar"><div class="fill" id="bsFill"></div></div>
+        <div class="barsm" id="ssBar"><div class="fill" id="ssFill"></div></div>
+      </div>
+      <div class="corner bl">
+        <div class="brand">slam royale · online</div>
+        <div class="keys">
+          <b>WASD</b><span>move</span><b>Mouse</b><span>look</span><b>Shift</b><span>sprint</span>
+          <b>R</b><span>light 1</span><b>F</b><span>light 2</span><b>V</b><span>light 3</span>
+          <b>G</b><span>heavy (hold=grab)</span><b>B</b><span>block</span><b>C</b><span>dodge</span>
+          <b>Space</b><span>jump</span><b>Q</b><span>aim item</span><b>E</b><span>throw item</span><b>T</b><span>superstar mode (T again = super attack)</span>
+        </div>
+      </div>
+    </div>
+    <div id="gate"><div class="card"><div class="ring"></div><div class="big">Enter the brawl</div><div class="sub">Click to lock the cursor</div></div></div>
+    <div id="end"><div class="card"><div class="huge" id="endTitle">—</div><div class="sub" id="endSub"></div><button class="menu-btn pri" id="endContinueBtn">Continue</button><button class="menu-btn" id="endSpectateBtn" style="display:none">Spectate</button></div></div>
+    <div id="countdown"><div class="cdnum" id="cdNum">3</div></div>
+  </div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script>window.SLAM_API_BASE = 'https://webpage-production-111b.up.railway.app/slam-royale';</script>
+<script type="module" src="main.js"></script>
+</body>
+</html>

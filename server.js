@@ -370,7 +370,17 @@ var httpServer = app.listen(PORT, function() {
 // perMessageDeflate off: this connection carries frequent small real-time
 // packets (player position, enemy/pickup sync, ~10/sec), where per-message
 // compress/decompress overhead costs more latency than the bandwidth it saves.
-var wss = new WebSocketServer({ server: httpServer, perMessageDeflate: false });
+// noServer: true — this used to attach directly ({server: httpServer}), which
+// worked fine when it was the only WebSocketServer around. Slam Royale (see
+// slam-royale/server/mount.js, mounted below) adds a second one; `ws`'s own
+// per-instance `path` option does NOT let two WebSocketServers cleanly share one
+// httpServer — internally, EVERY attached WebSocketServer reacts to EVERY
+// upgrade event and aborts the handshake itself (writes its own 400, destroys the
+// socket) the instant its path doesn't match, so whichever one is registered
+// first kills requests meant for the other before it's ever seen. Fixed below
+// with a single manual httpServer.on('upgrade', ...) dispatcher that routes by
+// path to whichever instance's handleUpgrade() actually matches.
+var wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
 
 wss.on('connection', function(ws) {
   clients.set(ws, { id: genId(), name: null, lobbyId: null });
@@ -524,3 +534,55 @@ wss.on('connection', function(ws) {
     clients.delete(ws);
   });
 });
+
+// Single manual upgrade dispatcher for the whole httpServer (see the noServer
+// note on `wss` above for why this replaces per-instance `path` options).
+// slamWss starts null and is filled in once the async mount below resolves —
+// in practice that's within milliseconds of process start, long before real
+// traffic arrives, so there's no meaningful race in production use.
+var slamWss = null;
+httpServer.on('upgrade', function(req, socket, head) {
+  var pathname;
+  try { pathname = new URL(req.url, 'http://internal').pathname; }
+  catch (e) { socket.destroy(); return; }
+
+  if (pathname === '/mercs-ws') {
+    wss.handleUpgrade(req, socket, head, function(ws) { wss.emit('connection', ws, req); });
+  } else if (pathname === '/slam-royale/ws') {
+    if (slamWss) slamWss.handleUpgrade(req, socket, head, function(ws) { slamWss.emit('connection', ws, req); });
+    else socket.destroy();
+  } else {
+    socket.destroy();
+  }
+});
+
+// ── SLAM ROYALE (embedded second app, mounted onto this same httpServer) ──
+//
+// slam-royale/ is a separate ES-module project (see slam-royale/package.json's
+// "type":"module") copied in alongside this one — this file stays CommonJS,
+// unchanged in every other way. A CJS file can't synchronously require() an ES
+// module, so dynamic import() (the standard supported bridge) is used instead.
+(async function() {
+  try {
+    var slamMod = await import('./slam-royale/server/mount.js');
+    var slam = slamMod.mountSlamRoyale();
+    slamWss = slam.wss; // now handled by the dispatcher registered above
+    // Mounted at '/slam-royale' (not '/slam-royale/api'): Express's app.use(path, fn)
+    // strips only this prefix from req.url before the handler below runs, so a
+    // request for '/slam-royale/api/default-character' arrives here with
+    // req.url === '/api/default-character' — exactly the path shape
+    // slam-royale/server/api.js's own route table already expects, unmodified.
+    // Query string is split off the same way server/server.js's own standalone
+    // static-file handler does it (handleApi's 3rd arg must be the bare path for
+    // its exact-match route lookup; it re-parses req.url itself for query params).
+    app.use('/slam-royale', function(req, res, next) {
+      var p0 = decodeURIComponent(req.url.split('?')[0]);
+      if (p0.indexOf('/api/') === 0) { slam.handleApi(req, res, p0); return; }
+      next(); // not an API call — fall through to express.static(__dirname) above,
+               // which already serves slam-royale/client/*.html etc. unmodified
+    });
+    console.log('Slam Royale mounted at /slam-royale (WS at ' + slamMod.WS_PATH + ')');
+  } catch (e) {
+    console.error('Failed to mount Slam Royale:', e);
+  }
+})();
