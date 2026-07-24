@@ -66,10 +66,23 @@ export function currentUser(req) {
   return user ? { ...user, sessionToken: token } : null;
 }
 
+// SameSite=Lax cookies are never sent on cross-site fetch()/XHR requests (only
+// on top-level navigations) — only SameSite=None does that, and browsers only
+// accept SameSite=None alongside Secure. Since this app is now served from a
+// different origin than its own API (GitHub Pages ↔ Railway — see
+// client/character-sync.js's SLAM_API_BASE), every request is cross-site, so
+// Lax would silently never send the session cookie back after login, making
+// every admin-only request 401 regardless of actually being logged in. `secure`
+// already reflects whether THIS request is actually HTTPS (api.js's isSecure())
+// — None+Secure whenever it is (production, behind Railway's TLS), falling back
+// to the old Lax (no Secure) for plain-http local dev, where SameSite=None
+// would be rejected by the browser outright and no cookie would be set at all.
 export function sessionCookie(token, secure) {
   const maxAge = Math.floor(SESSION_TTL_MS / 1000);
-  return `${COOKIE_NAME}=${token}; HttpOnly; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure ? '; Secure' : ''}`;
+  const sameSite = secure ? 'None; Secure' : 'Lax';
+  return `${COOKIE_NAME}=${token}; HttpOnly; Path=/; Max-Age=${maxAge}; SameSite=${sameSite}`;
 }
 export function clearCookie(secure) {
-  return `${COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secure ? '; Secure' : ''}`;
+  const sameSite = secure ? 'None; Secure' : 'Lax';
+  return `${COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=${sameSite}`;
 }
