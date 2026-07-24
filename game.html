@@ -3602,10 +3602,7 @@ const Net = {
     const base = API_BASE || (location.protocol + '//' + location.host);
     const proto = base.startsWith('https') ? 'wss:' : 'ws:';
     const host = base.replace(/^https?:\/\//, '');
-    // /mercs-ws: the server's WebSocketServer is now path-scoped (see server.js)
-    // so a second, separate WebSocketServer for Slam Royale can share the same
-    // HTTP server without both claiming every upgrade request.
-    const socket = new WebSocket(proto + '//' + host + '/mercs-ws');
+    const socket = new WebSocket(proto + '//' + host);
     this.ws = socket;
     socket.onopen  = () => { if (this.ws === socket) onOpen && onOpen(); };
     socket.onerror = () => { if (this.ws === socket) onError && onError(); };
