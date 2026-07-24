@@ -210,17 +210,18 @@ export class Studio{
     this.GC=currentGameConfig(); this.MV=currentMovesBalance();   // seeded with hardcoded defaults; _loadGameConfig() below overwrites with whatever's persisted
     this.audio=new SoundBank(); this.audioCfg=Object.fromEntries(SOUND_SLOTS.map(s=>[s,{volume:1,hasSample:false,name:null,start:0,end:null}]));
     this._knobs={};   // slot -> {start,end} knob instances, see renderAudioMixer()
-    this._authed=false; this._restoring=false;
+    // Always true now — no sign-in gate; every visitor can edit the game's one
+    // shared default character (see server/api.js's requireAdmin, which no
+    // longer actually checks anything either).
+    this._authed=true; this._restoring=false;
     this._viewport(); this._wire(); this.refreshStates(); this.refreshJSON();
     this.renderGameConfig(); this.renderMoveBalance(); this.renderAudioMixer();
     this.status('Drop a rig, or press “Load sample”. Then Enter match.');
     this.running=true; this._loop();
-  }
-  // called by main.js right after mount, and again whenever admin sign-in state changes
-  onAuthChange(isAdmin){
-    this._authed=isAdmin;
-    if(isAdmin){ this._restoreFromServer(); this._loadGameConfig(); this._loadAudioConfig(); }
-    else this.status('Sign in as the admin account to edit the game’s default character.');
+    // Previously deferred until sign-in was confirmed (onAuthChange(true)) —
+    // now runs unconditionally right after mount, since there's no longer a
+    // sign-in event to wait for.
+    this._restoreFromServer(); this._loadGameConfig(); this._loadAudioConfig();
   }
   q(s){ return this.root.querySelector(s); }
   _viewport(){

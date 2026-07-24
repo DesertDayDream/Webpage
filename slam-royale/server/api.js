@@ -132,15 +132,11 @@ function soundConfigPayload() {
   return out;
 }
 
-function requireAuth(req, res) {
-  const user = currentUser(req);
-  if (!user) { json(res, 401, { error: 'not signed in' }); return null; }
-  return user;
-}
+// No sign-in required — every one of the 11 call sites below only checks
+// truthiness (`if (!user) return;`), never reads a property off the result, so
+// this can stay a no-op stand-in rather than touching each call site.
 function requireAdmin(req, res) {
-  const user = requireAuth(req, res); if (!user) return null;
-  if (!user.is_admin) { json(res, 403, { error: 'only the admin account can do that' }); return null; }
-  return user;
+  return { is_admin: 1 };
 }
 
 async function clearDefaultAnims() {

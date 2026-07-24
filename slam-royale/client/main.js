@@ -9,7 +9,6 @@ import { emptyCmd } from '../shared/movement.js';
 import { Net } from './net.js';
 import { View } from './render.js';
 import { Studio } from './studio.js';
-import * as auth from './auth.js';
 import { getDefaultCharacter } from './character-sync.js';
 import { getGameConfig } from './game-config-sync.js';
 import { SoundBank } from './sound.js';
@@ -23,7 +22,6 @@ const lobbyListScreen=$('lobbyListScreen'), lobbyWaitScreen=$('lobbyWaitScreen')
 const sound = new SoundBank();
 
 let studio=null, view=null, net=null, mode='menu', raf=0, seq=0, acc=0, last=0;
-let authEmail=null, authIsAdmin=false, authTab='signin';
 const keys=new Set(); let mDX=0,mDY=0, locked=false;
 const liveIds=new Set();   // reused every frame instead of allocating a new Set (perf)
 let fpsFrames=0, fpsAccum=0, simMsAccum=0, renderMsAccum=0, callsAccum=0, triAccum=0;   // frametime counter: averaged over ~1s, not updated every frame
@@ -72,50 +70,13 @@ const down=c=>keys.has(c);
 const consumeMouse=()=>{ const d={x:mDX,y:mDY}; mDX=0;mDY=0; return d; };
 const consumeShots=()=>{ const s={...oneShot}; oneShot.light1=oneShot.light2=oneShot.light3=oneShot.throw=oneShot.dodge=oneShot.activate=false; return s; };
 
-// main menu: browse lobbies for everyone; Character Studio only shows up for the admin
+// main menu: browse lobbies for everyone; Character Studio has no gate anymore either
+// — no sign-in step at all, see server/api.js's requireAdmin.
 $('menuPlay').addEventListener('click', enterLobbyBrowser);
 $('menuStudio').addEventListener('click', showStudio);
 gate.addEventListener('click', ()=>{ sound.resume(); if(mode==='match'&&view) view.renderer.domElement.requestPointerLock(); });
 
-/* ---- account: sign in as the admin to build the game's default character ---- */
-function applyAuthState(res){
-  authEmail=res.email; authIsAdmin=!!res.isAdmin;
-  $('menuStudio').style.display = authIsAdmin ? '' : 'none';
-  if(studio) studio.onAuthChange(authIsAdmin);
-}
-function renderAuth(){
-  const el=$('authBox'); if(!el) return;
-  if(authEmail){
-    el.innerHTML=`<div class="auth-you">Signed in as <b>${esc(authEmail)}</b>${authIsAdmin?' <span style="color:var(--accent)">· admin</span>':''}</div><button class="menu-btn" data-signout>Sign out</button>`;
-    el.querySelector('[data-signout]').addEventListener('click', async ()=>{
-      try{ await auth.logout(); }catch(e){}
-      applyAuthState({email:null,isAdmin:false}); renderAuth();
-    });
-    return;
-  }
-  el.innerHTML=`
-    <div class="auth-tabs">
-      <button class="auth-tab ${authTab==='signin'?'on':''}" data-tab="signin">Sign in</button>
-      <button class="auth-tab ${authTab==='signup'?'on':''}" data-tab="signup">Create account</button>
-    </div>
-    <input type="email" placeholder="email" autocomplete="email" data-email>
-    <input type="password" placeholder="password (8+ characters)" autocomplete="${authTab==='signin'?'current-password':'new-password'}" data-password>
-    <button class="menu-btn pri" data-submit>${authTab==='signin'?'Sign in':'Create account'}</button>
-    <div class="auth-msg" data-msg></div>`;
-  el.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{ authTab=b.dataset.tab; renderAuth(); }));
-  const submit=async()=>{
-    const email=el.querySelector('[data-email]').value.trim(), password=el.querySelector('[data-password]').value;
-    const msg=el.querySelector('[data-msg]'); msg.className='auth-msg'; msg.textContent='Working…';
-    try{
-      const res = authTab==='signin' ? await auth.login(email,password) : await auth.signup(email,password);
-      applyAuthState(res); renderAuth();
-    }catch(e){ msg.textContent=e.message; }
-  };
-  el.querySelector('[data-submit]').addEventListener('click', submit);
-  el.querySelector('[data-password]').addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
-}
 function esc(s){ return String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
-(async()=>{ try{ applyAuthState(await auth.me()); }catch(e){} renderAuth(); })();
 
 function menuError(e){ console.error(e); const el=$('menuErr'); if(!el)return;
   el.style.display='block'; el.textContent='Something went wrong: '+(e&&e.message||e); }
@@ -137,7 +98,7 @@ function showStudio(){
     // Studio's "Enter match →" bypasses the lobby entirely (a solo room that skips
     // the wait — see server/rooms.js's createSoloRoom()), so the admin gets the same
     // instant in-progress-character preview they always have.
-    if(!studio){ studio = new Studio(studioScreen, ()=>joinRoom(undefined, undefined, true)); studio.onAuthChange(authIsAdmin); }
+    if(!studio){ studio = new Studio(studioScreen, ()=>joinRoom(undefined, undefined, true)); }
     else studio.start();
   }catch(e){ studioScreen.style.display='none'; menuScreen.style.display='flex'; menuError(e); return; }
   mode='studio';

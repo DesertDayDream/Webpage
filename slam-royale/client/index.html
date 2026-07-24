@@ -42,16 +42,6 @@
   .menu-btn.pri{background:var(--accent);color:#1a1205;border-color:var(--accent);font-weight:600}
   .menu-btn.pri .k{color:#1a1205;opacity:.7}
   #menuErr{margin-top:18px;font-size:10.5px;color:var(--bad);display:none;white-space:pre-wrap}
-  .auth-box{margin-top:22px;text-align:left;border-top:1px solid var(--line);padding-top:18px}
-  .auth-tabs{display:flex;gap:6px;margin-bottom:10px}
-  .auth-tab{flex:1;border:1px solid var(--line);background:var(--panel2);color:var(--dim);border-radius:6px;padding:6px;font-family:var(--mono);font-size:10.5px;cursor:pointer}
-  .auth-tab.on{border-color:var(--accent);color:var(--accent)}
-  .auth-box input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:9px 10px;font-family:var(--mono);font-size:11px;margin-bottom:8px}
-  .auth-box input:focus{outline:none;border-color:var(--accent)}
-  .auth-msg{font-size:10.5px;color:var(--bad);min-height:12px;margin-top:2px}
-  .auth-msg.ok{color:var(--good)}
-  .auth-you{font-size:11px;color:var(--dim);margin-bottom:12px;text-align:center}
-  .auth-you b{color:var(--ink)}
 
   /* ---------------- studio ---------------- */
   .studio-root{display:flex;height:100%}
@@ -181,10 +171,9 @@
       <div class="menu-sub">An authoritative-server multiplayer melee brawler.</div>
       <div class="menu-actions">
         <button class="menu-btn pri" id="menuPlay">Enter match<span class="k">quick play · procedural fighter</span></button>
-        <button class="menu-btn" id="menuStudio" style="display:none">Character Studio<span class="k">admin only — edit the game's default character</span></button>
+        <button class="menu-btn" id="menuStudio">Character Studio<span class="k">edit the game's default character</span></button>
       </div>
       <div id="menuErr"></div>
-      <div class="auth-box" id="authBox"></div>
     </div>
   </div>
 
