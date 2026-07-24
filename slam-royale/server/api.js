@@ -54,16 +54,25 @@ function readMultipart(req) {
     const bb = Busboy({ headers: req.headers, limits: { fileSize: MAX_FILE_BYTES, files: 1 } });
     const fields = {}; let file = null, tooBig = false, settled = false;
     let bbFinished = false, fileSettled = true;
+    let currentTmpPath = null;   // whatever's currently being written, if anything — see fail() below
     const maybeDone = () => {
       if (settled || !bbFinished || !fileSettled) return; settled = true;
       tooBig ? reject(Object.assign(new Error('file too large'), { status: 413 })) : resolve({ fields, file });
     };
-    const fail = e => { if (settled) return; settled = true; reject(e); };
+    // A write failure (e.g. ENOSPC — disk full) previously left whatever had
+    // already been written sitting in UPLOAD_DIR forever, since nothing here ever
+    // deleted it — every failed attempt permanently consumed more disk space,
+    // making the NEXT attempt (and the one after that) even more likely to hit
+    // the same error. Cleaning up here means a failed upload's temp file doesn't
+    // outlive the failure.
+    const fail = e => { if (settled) return; settled = true;
+      if (currentTmpPath) fs.unlink(currentTmpPath, () => {});
+      reject(e); };
 
     bb.on('field', (name, val) => { fields[name] = val; });
     bb.on('file', (name, stream, info) => {
       fileSettled = false;
-      const tmpPath = path.join(UPLOAD_DIR, 'tmp-' + crypto.randomBytes(16).toString('hex'));
+      const tmpPath = currentTmpPath = path.join(UPLOAD_DIR, 'tmp-' + crypto.randomBytes(16).toString('hex'));
       const out = fs.createWriteStream(tmpPath);
       stream.on('limit', () => { tooBig = true; stream.unpipe(out); out.destroy(); fs.unlink(tmpPath, () => {}); fileSettled = true; maybeDone(); });
       stream.pipe(out);

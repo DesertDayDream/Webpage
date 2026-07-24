@@ -18,6 +18,17 @@ export const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'slam-royale');
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
+// Sweep any 'tmp-*' files left behind by an upload that never finished (e.g. a
+// write that failed partway through — server/api.js's readMultipart() now
+// cleans these up itself when that happens, but this covers whatever's already
+// sitting here from before that fix, and any other way a temp file could be
+// orphaned (a killed process mid-upload, etc.). These are always fully-internal
+// temp names (never referenced by any DB row), so anything matching is safe to
+// remove unconditionally.
+for (const name of fs.readdirSync(UPLOAD_DIR)) {
+  if (name.startsWith('tmp-')) fs.unlink(path.join(UPLOAD_DIR, name), () => {});
+}
+
 export const db = new Database(path.join(DATA_DIR, 'slam-royale.sqlite'));
 db.pragma('journal_mode = WAL');
 
